@@ -1,12 +1,13 @@
-import { Redis } from '@upstash/redis';
+import { Redis } from '@upstash/redis/cloudflare';
 
 /**
- * Singleton Upstash Redis client.
- * Reads UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN from env.
+ * Create an Upstash Redis client from CF Worker env bindings.
+ * @param {object} env - Cloudflare Worker env (UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN)
+ * @returns {Redis}
  */
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
-
-export default redis;
+export function getRedis(env) {
+  return new Redis({
+    url: env.UPSTASH_REDIS_REST_URL,
+    token: env.UPSTASH_REDIS_REST_TOKEN,
+  });
+}

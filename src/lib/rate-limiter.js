@@ -1,13 +1,8 @@
-import redis from './redis-client.js';
+import { getRedis } from './redis-client.js';
 import { MAX_CREDITS, CREDIT_REGEN_RATE } from './constants.js';
 
 /**
  * Lua script for atomic check-and-deduct of stackable credits.
- * KEYS[1] = credits:{userId}
- * ARGV[1] = count (pixels to place)
- * ARGV[2] = now (unix seconds)
- * ARGV[3] = max credits
- * ARGV[4] = regen rate (credits per second)
  * Returns: [allowed (0/1), remaining, retryAfter]
  */
 const CREDIT_SCRIPT = `
@@ -38,11 +33,13 @@ return {1, remaining, 0}
 
 /**
  * Check and deduct credits for a user's pixel placement.
+ * @param {object} env
  * @param {string} userId
- * @param {number} count - number of pixels to place
+ * @param {number} count
  * @returns {Promise<{allowed: boolean, remaining: number, retryAfter: number}>}
  */
-export async function checkAndDeductCredits(userId, count) {
+export async function checkAndDeductCredits(env, userId, count) {
+  const redis = getRedis(env);
   const now = Math.floor(Date.now() / 1000);
   const key = `credits:${userId}`;
 

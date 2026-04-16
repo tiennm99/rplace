@@ -1,0 +1,26 @@
+{
+  "name": "rplace",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-04-01",
+  "assets": {
+    "directory": "dist"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CANVAS_ROOM",
+        "class_name": "CanvasRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["CanvasRoom"]
+    }
+  ],
+  "vars": {
+    "CANVAS_WIDTH": "2048",
+    "CANVAS_HEIGHT": "2048"
+  }
+}

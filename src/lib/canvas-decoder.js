@@ -1,9 +1,9 @@
-import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA } from './constants';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA } from './constants.js';
 
 /**
  * Decode 5-bit packed canvas buffer into an array of color indices.
  * @param {ArrayBuffer} buffer - raw canvas bytes
- * @returns {Uint8Array} color index per pixel (length = CANVAS_WIDTH * CANVAS_HEIGHT)
+ * @returns {Uint8Array} color index per pixel
  */
 export function decodeCanvas(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -14,7 +14,6 @@ export function decodeCanvas(buffer) {
   for (let i = 0; i < totalPixels; i++) {
     const byteIndex = bitPos >> 3;
     const bitOffset = bitPos & 7;
-    // Read 5 bits spanning at most 2 bytes
     const value =
       ((bytes[byteIndex] << 8 | (bytes[byteIndex + 1] || 0)) >> (11 - bitOffset)) & 0x1f;
     indices[i] = value;
@@ -26,7 +25,7 @@ export function decodeCanvas(buffer) {
 
 /**
  * Convert color indices array to RGBA ImageData pixels.
- * @param {Uint8Array} indices - color index per pixel
+ * @param {Uint8Array} indices
  * @returns {Uint8ClampedArray} RGBA data for ImageData
  */
 export function indicesToRgba(indices) {

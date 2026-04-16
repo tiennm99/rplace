@@ -1,4 +1,4 @@
-/** Canvas dimensions (configurable) */
+/** Canvas dimensions (configurable via wrangler.json vars) */
 export const CANVAS_WIDTH = 2048;
 export const CANVAS_HEIGHT = 2048;
 export const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
@@ -14,7 +14,6 @@ export const MAX_CREDITS = 256;
 
 /** Redis keys */
 export const REDIS_CANVAS_KEY = 'canvas';
-export const REDIS_UPDATES_KEY = 'canvas:updates';
 
 /** 32-color palette from rplace.live (hex values) */
 export const COLORS = [
