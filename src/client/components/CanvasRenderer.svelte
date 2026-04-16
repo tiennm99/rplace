@@ -12,21 +12,22 @@
   let lastMouse = { x: 0, y: 0 };
   let loading = $state(true);
 
-  // Cached offscreen canvas — avoids re-allocation every render
+  // Touch state
+  let lastTouchDist = 0;
+  let touchStartTime = 0;
+  let touchMoved = false;
+
+  // Cached offscreen canvas
   const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
   const offCtx = offscreen.getContext('2d');
 
-  /** Render ImageData onto visible canvas with current zoom/pan */
   function render() {
     if (!canvasEl || !imageData) return;
     const ctx = canvasEl.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-
     offCtx.putImageData(imageData, 0, 0);
-
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
@@ -34,7 +35,6 @@
     ctx.restore();
   }
 
-  /** Convert screen coords to canvas pixel coords */
   function screenToCanvas(clientX, clientY) {
     return {
       x: Math.floor((clientX - pan.x) / zoom),
@@ -42,7 +42,6 @@
     };
   }
 
-  /** Update a single pixel locally */
   function updatePixel(x, y, colorIndex) {
     if (!imageData) return;
     const color = COLORS_RGBA[colorIndex];
@@ -53,12 +52,10 @@
     imageData.data[offset + 3] = color[3];
   }
 
-  /** Place a pixel via API */
   async function placePixel(x, y) {
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
     if (credits <= 0) return;
 
-    // Optimistic update
     updatePixel(x, y, selectedColor);
     render();
 
@@ -69,21 +66,20 @@
         body: JSON.stringify({ pixels: [{ x, y, color: selectedColor }] }),
       });
       const data = await res.json();
-      if (data.ok) {
-        onCreditsChange(data.credits);
-      }
+      if (data.ok) onCreditsChange(data.credits);
     } catch (err) {
       console.error('Failed to place pixel:', err);
     }
   }
 
-  /** Apply pixel updates from WebSocket */
   export function applyUpdates(pixels) {
     for (const { x, y, color } of pixels) {
       updatePixel(x, y, color);
     }
     render();
   }
+
+  // --- Mouse handlers ---
 
   function handleMouseDown(e) {
     if (e.button === 0) {
@@ -122,20 +118,87 @@
     e.preventDefault();
     const factor = e.deltaY < 0 ? 2 : 0.5;
     const newZoom = Math.max(0.25, Math.min(64, zoom * factor));
-
     const cx = e.clientX;
     const cy = e.clientY;
     pan.x = cx - (cx - pan.x) * (newZoom / zoom);
     pan.y = cy - (cy - pan.y) * (newZoom / zoom);
-
     onZoomChange(newZoom);
+  }
+
+  // --- Touch handlers (pinch-zoom, drag-pan, long-press to place) ---
+
+  function getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function getTouchCenter(touches) {
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  }
+
+  function handleTouchStart(e) {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      touchStartTime = Date.now();
+      touchMoved = false;
+      lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+      lastTouchDist = getTouchDist(e.touches);
+      lastMouse = getTouchCenter(e.touches);
+    }
+  }
+
+  function handleTouchMove(e) {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      const dx = e.touches[0].clientX - lastMouse.x;
+      const dy = e.touches[0].clientY - lastMouse.y;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) touchMoved = true;
+      pan.x += dx;
+      pan.y += dy;
+      lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      render();
+    } else if (e.touches.length === 2) {
+      touchMoved = true;
+      const dist = getTouchDist(e.touches);
+      const center = getTouchCenter(e.touches);
+      const scale = dist / lastTouchDist;
+      const newZoom = Math.max(0.25, Math.min(64, zoom * scale));
+
+      // Zoom toward pinch center
+      pan.x = center.x - (center.x - pan.x) * (newZoom / zoom);
+      pan.y = center.y - (center.y - pan.y) * (newZoom / zoom);
+
+      // Pan with pinch movement
+      pan.x += center.x - lastMouse.x;
+      pan.y += center.y - lastMouse.y;
+
+      lastTouchDist = dist;
+      lastMouse = center;
+      onZoomChange(newZoom);
+    }
+  }
+
+  function handleTouchEnd(e) {
+    // Long-press to place pixel (>300ms, no movement, single touch)
+    if (!touchMoved && e.changedTouches.length === 1) {
+      const elapsed = Date.now() - touchStartTime;
+      if (elapsed > 300) {
+        const t = e.changedTouches[0];
+        const pos = screenToCanvas(t.clientX, t.clientY);
+        placePixel(pos.x, pos.y);
+      }
+    }
   }
 
   // Re-render when zoom changes
   $effect(() => { zoom; render(); });
 
   onMount(async () => {
-    // Size canvas to viewport
     function resize() {
       canvasEl.width = window.innerWidth;
       canvasEl.height = window.innerHeight;
@@ -144,7 +207,6 @@
     resize();
     window.addEventListener('resize', resize);
 
-    // Load full canvas
     try {
       const res = await fetch('/api/canvas');
       const buffer = await res.arrayBuffer();
@@ -172,7 +234,10 @@
     onmousemove={handleMouseMove}
     onmouseup={handleMouseUp}
     onwheel={handleWheel}
-    style="cursor: {dragging ? 'grabbing' : 'crosshair'}"
+    ontouchstart={handleTouchStart}
+    ontouchmove={handleTouchMove}
+    ontouchend={handleTouchEnd}
+    style="cursor: {dragging ? 'grabbing' : 'crosshair'}; touch-action: none"
   ></canvas>
 </div>
 

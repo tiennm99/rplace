@@ -8,7 +8,7 @@ export const BITS_PER_PIXEL = 5;
 export const MAX_COLORS = 32;
 
 /** Rate limiting — stackable credit system */
-export const MAX_BATCH_SIZE = 256;
+export const MAX_BATCH_SIZE = 32;
 export const CREDIT_REGEN_RATE = 1; // credits per second
 export const MAX_CREDITS = 256;
 
