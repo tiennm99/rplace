@@ -5,9 +5,8 @@
  * @returns {string} user id prefixed with "anon:"
  */
 export function getUserId(request) {
-  const ip = request.headers.get('cf-connecting-ip')
-    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || '127.0.0.1';
+  // CF-Connecting-IP is set by Cloudflare and cannot be spoofed
+  const ip = request.headers.get('cf-connecting-ip') || '127.0.0.1';
 
   // Simple hash for privacy
   let hash = 0;

@@ -12,6 +12,10 @@
   let lastMouse = { x: 0, y: 0 };
   let loading = $state(true);
 
+  // Cached offscreen canvas — avoids re-allocation every render
+  const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+  const offCtx = offscreen.getContext('2d');
+
   /** Render ImageData onto visible canvas with current zoom/pan */
   function render() {
     if (!canvasEl || !imageData) return;
@@ -21,8 +25,7 @@
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
 
-    const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-    offscreen.getContext('2d').putImageData(imageData, 0, 0);
+    offCtx.putImageData(imageData, 0, 0);
 
     ctx.save();
     ctx.translate(pan.x, pan.y);

@@ -63,13 +63,17 @@ app.post('/api/place', async (c) => {
   // Write pixels to canvas
   await setPixels(c.env, pixels);
 
-  // Broadcast to all connected WebSocket clients
-  const roomId = c.env.CANVAS_ROOM.idFromName('main');
-  const room = c.env.CANVAS_ROOM.get(roomId);
-  await room.fetch(new Request('http://internal/broadcast', {
-    method: 'POST',
-    body: JSON.stringify(pixels),
-  }));
+  // Broadcast to all connected WebSocket clients (non-blocking)
+  try {
+    const roomId = c.env.CANVAS_ROOM.idFromName('main');
+    const room = c.env.CANVAS_ROOM.get(roomId);
+    await room.fetch(new Request('http://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify(pixels),
+    }));
+  } catch (err) {
+    console.error('Broadcast failed:', err);
+  }
 
   return c.json({ ok: true, credits: remaining });
 });

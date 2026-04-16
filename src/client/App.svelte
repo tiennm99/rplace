@@ -13,8 +13,8 @@
   /** @type {CanvasRenderer} */
   let canvasRenderer;
 
-  // WebSocket connection for real-time updates
-  $effect(() => {
+  // WebSocket connection with auto-reconnect
+  function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/api/ws`);
 
@@ -27,11 +27,14 @@
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onclose = () => {
-      // Reconnect after 1s
-      setTimeout(() => { /* effect re-runs on reactive dep change */ }, 1000);
-    };
+    ws.onclose = () => setTimeout(connectWebSocket, 1000);
+    ws.onerror = () => ws.close();
 
+    return ws;
+  }
+
+  $effect(() => {
+    const ws = connectWebSocket();
     return () => ws.close();
   });
 </script>
