@@ -16,7 +16,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": ["CanvasRoom"]
+      "new_sqlite_classes": ["CanvasRoom"]
     }
   ]
 }

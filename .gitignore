@@ -107,6 +107,9 @@ dist
 # Docusaurus cache and generated files
 .docusaurus
 
+# Wrangler (Cloudflare Workers CLI)
+.wrangler/
+
 # Serverless directories
 .serverless/
 
