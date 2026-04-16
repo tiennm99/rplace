@@ -33,3 +33,26 @@ export async function redisRaw(env, command) {
   }
   return res.json();
 }
+
+/**
+ * Execute a Redis command via Upstash path-based REST API with base64 response.
+ * Uses Upstash-Encoding: base64 for binary-safe response transport.
+ * @param {object} env
+ * @param {string[]} command - Redis command as array, e.g. ['GETRANGE', 'key', '0', '100']
+ * @returns {Promise<string|null>} base64-encoded result string
+ */
+export async function redisRawBinary(env, command) {
+  const path = command.map((arg) => encodeURIComponent(String(arg))).join('/');
+  const res = await fetch(`${env.UPSTASH_REDIS_REST_URL}/${path}`, {
+    headers: {
+      Authorization: `Bearer ${env.UPSTASH_REDIS_REST_TOKEN}`,
+      'Upstash-Encoding': 'base64',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Redis command failed: ${res.status} ${text}`);
+  }
+  const { result } = await res.json();
+  return result; // base64-encoded string
+}
