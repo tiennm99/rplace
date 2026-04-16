@@ -81,7 +81,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pixels }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch {
+        console.error('Server returned non-JSON:', res.status, text);
+        return;
+      }
       if (data.ok) {
         credits = data.credits;
         canvasRenderer.commitPending();

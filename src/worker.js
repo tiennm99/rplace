@@ -60,10 +60,14 @@ app.post('/api/place', async (c) => {
     return c.json({ error: 'rate_limited', remaining, retryAfter }, 429);
   }
 
-  // Write pixels to canvas
-  await setPixels(c.env, pixels);
+  // Write pixels to canvas + broadcast
+  try {
+    await setPixels(c.env, pixels);
+  } catch (err) {
+    console.error('Redis write failed:', err);
+    return c.json({ error: 'storage_failed', message: String(err) }, 500);
+  }
 
-  // Broadcast to all connected WebSocket clients (non-blocking)
   try {
     const roomId = c.env.CANVAS_ROOM.idFromName('main');
     const room = c.env.CANVAS_ROOM.get(roomId);

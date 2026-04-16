@@ -1,4 +1,4 @@
-import { getRedis } from './redis-client.js';
+import { getRedis, redisRaw } from './redis-client.js';
 import { CANVAS_WIDTH, TOTAL_PIXELS, BITS_PER_PIXEL, REDIS_CANVAS_KEY } from './constants.js';
 
 /** Total bytes needed for the canvas bitfield */
@@ -53,12 +53,12 @@ export async function getFullCanvas(env) {
  */
 export async function setPixels(env, pixels) {
   if (!pixels.length) return;
-  const redis = getRedis(env);
 
-  let chain = redis.bitfield(REDIS_CANVAS_KEY);
+  // Use raw REST API for BITFIELD — SDK builder API is broken in @upstash/redis 1.x
+  const command = ['BITFIELD', REDIS_CANVAS_KEY];
   for (const { x, y, color } of pixels) {
     const offset = y * CANVAS_WIDTH + x;
-    chain = chain.set('u5', `#${offset}`, color);
+    command.push('SET', 'u5', `#${offset}`, String(color));
   }
-  await chain.exec();
+  await redisRaw(env, command);
 }

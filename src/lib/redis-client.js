@@ -11,3 +11,25 @@ export function getRedis(env) {
     token: env.UPSTASH_REDIS_REST_TOKEN,
   });
 }
+
+/**
+ * Execute a raw Redis command via Upstash REST API.
+ * Useful for commands where the SDK API is unreliable (e.g., BITFIELD).
+ * @param {object} env
+ * @param {string[]} command - Redis command as array, e.g. ['BITFIELD', 'key', 'SET', ...]
+ */
+export async function redisRaw(env, command) {
+  const res = await fetch(env.UPSTASH_REDIS_REST_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.UPSTASH_REDIS_REST_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(command),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Redis command failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
