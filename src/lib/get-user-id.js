@@ -13,5 +13,5 @@ export function getUserId(request) {
   for (let i = 0; i < ip.length; i++) {
     hash = ((hash << 5) - hash + ip.charCodeAt(i)) | 0;
   }
-  return `anon:${Math.abs(hash).toString(36)}`;
+  return `anon:${(hash >>> 0).toString(36)}`;
 }

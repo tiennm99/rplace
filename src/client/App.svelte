@@ -1,5 +1,5 @@
 <script>
-  import { MAX_CREDITS } from '../lib/constants.js';
+  import { MAX_CREDITS, CREDIT_REGEN_RATE } from '../lib/constants.js';
   import CanvasRenderer from './components/CanvasRenderer.svelte';
   import ColorPicker from './components/ColorPicker.svelte';
   import CanvasControls from './components/CanvasControls.svelte';
@@ -13,7 +13,19 @@
   /** @type {CanvasRenderer} */
   let canvasRenderer;
 
-  // WebSocket connection with auto-reconnect
+  // Client-side credit regeneration (server corrects on placement)
+  $effect(() => {
+    const interval = setInterval(() => {
+      if (credits < MAX_CREDITS) {
+        credits = Math.min(credits + CREDIT_REGEN_RATE, MAX_CREDITS);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  });
+
+  // WebSocket connection with auto-reconnect + exponential backoff
+  let wsRetryDelay = 1000;
+
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/api/ws`);
@@ -27,7 +39,11 @@
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onclose = () => setTimeout(connectWebSocket, 1000);
+    ws.onopen = () => { wsRetryDelay = 1000; };
+    ws.onclose = () => {
+      setTimeout(connectWebSocket, wsRetryDelay);
+      wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
+    };
     ws.onerror = () => ws.close();
 
     return ws;
