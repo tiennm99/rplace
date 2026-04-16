@@ -1,0 +1,159 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #1a1a1a;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+
+.app {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+/* Canvas */
+.canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-container canvas {
+  display: block;
+}
+
+.loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.5rem;
+  color: #888;
+}
+
+/* Color Picker */
+.color-picker {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.color-swatch {
+  width: 32px;
+  height: 32px;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.2);
+  z-index: 1;
+}
+
+.color-swatch.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+  transform: scale(1.15);
+}
+
+/* Canvas Controls */
+.canvas-controls {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-controls button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #333;
+  color: #fff;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-controls button:hover {
+  background: #555;
+}
+
+.zoom-level {
+  min-width: 40px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.coords {
+  font-size: 0.85rem;
+  color: #aaa;
+  font-variant-numeric: tabular-nums;
+}
+
+/* User Info */
+.user-info {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.credits {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
+.credits-label {
+  color: #888;
+}
+
+.credits-value {
+  font-weight: bold;
+  color: #4ade80;
+  font-variant-numeric: tabular-nums;
+}
+
+.credits-max {
+  color: #555;
+  font-size: 0.8rem;
+}
