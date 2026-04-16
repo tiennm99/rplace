@@ -18,5 +18,14 @@
       "tag": "v1",
       "new_sqlite_classes": ["CanvasRoom"]
     }
-  ]
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true
+    }
+  }
 }
