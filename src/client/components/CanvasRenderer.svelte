@@ -56,6 +56,8 @@
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
     if (credits <= 0) return;
 
+    // Optimistic deduction + render
+    onCreditsChange(credits - 1);
     updatePixel(x, y, selectedColor);
     render();
 
@@ -66,7 +68,12 @@
         body: JSON.stringify({ pixels: [{ x, y, color: selectedColor }] }),
       });
       const data = await res.json();
-      if (data.ok) onCreditsChange(data.credits);
+      if (data.ok) {
+        onCreditsChange(data.credits);
+      } else {
+        // Server rejected — log reason (pixel stays rendered, WS will correct)
+        console.warn('Place rejected:', data.error);
+      }
     } catch (err) {
       console.error('Failed to place pixel:', err);
     }

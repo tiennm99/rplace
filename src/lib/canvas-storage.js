@@ -21,11 +21,17 @@ export async function getFullCanvas(env) {
     return new Uint8Array(CANVAS_BYTES);
   }
 
-  // Upstash REST returns string — convert to bytes
+  // Upstash REST may return base64 or raw string for binary data
   if (typeof data === 'string') {
-    const bytes = new Uint8Array(data.length);
-    for (let i = 0; i < data.length; i++) {
-      bytes[i] = data.charCodeAt(i);
+    let raw;
+    try {
+      raw = atob(data);
+    } catch {
+      raw = data; // Already a raw string
+    }
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      bytes[i] = raw.charCodeAt(i);
     }
     // Pad to full canvas size if shorter
     if (bytes.length < CANVAS_BYTES) {

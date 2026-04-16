@@ -18,9 +18,5 @@
       "tag": "v1",
       "new_classes": ["CanvasRoom"]
     }
-  ],
-  "vars": {
-    "CANVAS_WIDTH": "2048",
-    "CANVAS_HEIGHT": "2048"
-  }
+  ]
 }
