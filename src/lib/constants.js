@@ -13,7 +13,8 @@ export const CREDIT_REGEN_RATE = 1; // credits per second
 export const MAX_CREDITS = 256;
 
 /** Redis keys */
-export const REDIS_CANVAS_KEY = 'canvas';
+export const REDIS_KEY_PREFIX = 'rplace:';
+export const REDIS_CANVAS_KEY = `${REDIS_KEY_PREFIX}canvas`;
 
 /** 32-color palette from rplace.live (hex values) */
 export const COLORS = [

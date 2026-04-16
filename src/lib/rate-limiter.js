@@ -1,5 +1,5 @@
 import { getRedis } from './redis-client.js';
-import { MAX_CREDITS, CREDIT_REGEN_RATE } from './constants.js';
+import { MAX_CREDITS, CREDIT_REGEN_RATE, REDIS_KEY_PREFIX } from './constants.js';
 
 /**
  * Lua script for atomic check-and-deduct of stackable credits.
@@ -41,7 +41,7 @@ return {1, remaining, 0}
 export async function checkAndDeductCredits(env, userId, count) {
   const redis = getRedis(env);
   const now = Math.floor(Date.now() / 1000);
-  const key = `credits:${userId}`;
+  const key = `${REDIS_KEY_PREFIX}credits:${userId}`;
 
   const result = await redis.eval(
     CREDIT_SCRIPT,
