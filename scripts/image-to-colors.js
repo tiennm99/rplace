@@ -14,6 +14,7 @@ import { parseArgs } from 'node:util';
 import sharp from 'sharp';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../src/lib/constants.js';
 import { rgbaToPalette } from '../src/lib/image-to-palette.js';
+import { resizeRgba } from '../src/lib/image-resize.js';
 
 const { values, positionals } = parseArgs({
   args: process.argv.slice(2),
@@ -21,12 +22,15 @@ const { values, positionals } = parseArgs({
     output: { type: 'string', short: 'o' },
     'alpha-threshold': { type: 'string', default: '128' },
     dither: { type: 'boolean', default: false },
+    width: { type: 'string' },
+    height: { type: 'string' },
+    method: { type: 'string', default: 'nearest' }, // nearest | bilinear | box
   },
   allowPositionals: true,
 });
 
 if (positionals.length < 1) {
-  console.error('Usage: node scripts/image-to-colors.js <input.png|jpg|webp> [-o output.json] [--alpha-threshold 128] [--dither]');
+  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither] [--width N] [--height N] [--method nearest|bilinear|box]');
   process.exit(1);
 }
 
@@ -44,16 +48,30 @@ const { data, info } = await sharp(input)
   .raw()
   .toBuffer({ resolveWithObject: true });
 
-const { width, height } = info;
+const { width: srcW, height: srcH } = info;
 
-if (width > CANVAS_WIDTH || height > CANVAS_HEIGHT) {
-  console.warn(`Warning: image ${width}x${height} exceeds canvas ${CANVAS_WIDTH}x${CANVAS_HEIGHT}. Upload will fail at the boundary.`);
+// Optional resize — defaults to source dims. Aspect-preserve when only one of W/H given.
+const reqW = values.width ? parseInt(values.width, 10) : null;
+const reqH = values.height ? parseInt(values.height, 10) : null;
+let outW = reqW ?? (reqH ? Math.round(srcW * reqH / srcH) : srcW);
+let outH = reqH ?? (reqW ? Math.round(srcH * reqW / srcW) : srcH);
+if (outW < 1 || outH < 1) {
+  console.error('Resolved width/height must be >= 1');
+  process.exit(1);
+}
+if (outW > CANVAS_WIDTH || outH > CANVAS_HEIGHT) {
+  console.warn(`Warning: output ${outW}x${outH} exceeds canvas ${CANVAS_WIDTH}x${CANVAS_HEIGHT}. Upload will fail at the boundary.`);
 }
 
+const working = (outW === srcW && outH === srcH)
+  ? data
+  : resizeRgba(data, srcW, srcH, outW, outH, values.method);
+
 // sharp raw buffer has channels=4 after ensureAlpha; same layout as Canvas ImageData.
-const indices = rgbaToPalette(data, width, height, { alphaThreshold, dither: values.dither });
+const indices = rgbaToPalette(working, outW, outH, { alphaThreshold, dither: values.dither });
 const pixels = Array.from(indices);
 const opaque = pixels.reduce((n, p) => n + (p >= 0 ? 1 : 0), 0);
 
-await writeFile(output, JSON.stringify({ width, height, pixels }));
-console.log(`Wrote ${output}: ${width}x${height}, ${opaque}/${pixels.length} opaque pixels${values.dither ? ' [dithered]' : ''}`);
+await writeFile(output, JSON.stringify({ width: outW, height: outH, pixels }));
+const resizeNote = (outW !== srcW || outH !== srcH) ? ` (resized from ${srcW}x${srcH} via ${values.method})` : '';
+console.log(`Wrote ${output}: ${outW}x${outH}${resizeNote}, ${opaque}/${pixels.length} opaque pixels${values.dither ? ' [dithered]' : ''}`);

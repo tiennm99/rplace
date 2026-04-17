@@ -1,6 +1,7 @@
 <script>
   import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
   import { rgbaToPalette, paletteToRgba } from '../../lib/image-to-palette.js';
+  import { resizeRgba } from '../../lib/image-resize.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
 
   let { open, cursorPos, getCommittedColor, onClose, onCredits } = $props();
@@ -23,6 +24,12 @@
   let originY = $state(0);
   let skipMatching = $state(true);
   let dither = $state(false);
+
+  // Resize controls — init to source dims on file load
+  let resizeW = $state(0);
+  let resizeH = $state(0);
+  let lockAspect = $state(true);
+  let resampleMethod = $state('nearest'); // 'nearest' | 'bilinear' | 'box'
 
   // Run state
   let status = $state('idle'); // 'idle' | 'running' | 'paused' | 'done' | 'error'
@@ -57,6 +64,8 @@
       srcRgba = data;
       srcWidth = w;
       srcHeight = h;
+      resizeW = w;
+      resizeH = h;
       // paletteIndices recomputed reactively via $effect below.
     } catch (err) {
       errorText = `Failed to load image: ${err.message || err}`;
@@ -66,10 +75,15 @@
     }
   }
 
-  // Re-quantize when source or dither mode changes.
+  // Re-run pipeline when source / resize / dither / method changes.
   $effect(() => {
-    if (!srcRgba) { paletteIndices = null; opaqueCount = 0; return; }
-    const idx = rgbaToPalette(srcRgba, srcWidth, srcHeight, { dither });
+    if (!srcRgba || resizeW <= 0 || resizeH <= 0) {
+      paletteIndices = null; opaqueCount = 0; return;
+    }
+    const working = (resizeW === srcWidth && resizeH === srcHeight)
+      ? srcRgba
+      : resizeRgba(srcRgba, srcWidth, srcHeight, resizeW, resizeH, resampleMethod);
+    const idx = rgbaToPalette(working, resizeW, resizeH, { dither });
     paletteIndices = idx;
     let count = 0;
     for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
@@ -79,11 +93,40 @@
 
   function renderPreview() {
     if (!previewEl || !paletteIndices) return;
-    const rgba = paletteToRgba(paletteIndices, srcWidth, srcHeight);
-    previewEl.width = srcWidth;
-    previewEl.height = srcHeight;
+    const rgba = paletteToRgba(paletteIndices, resizeW, resizeH);
+    previewEl.width = resizeW;
+    previewEl.height = resizeH;
     const ctx = previewEl.getContext('2d');
-    ctx.putImageData(new ImageData(rgba, srcWidth, srcHeight), 0, 0);
+    ctx.putImageData(new ImageData(rgba, resizeW, resizeH), 0, 0);
+  }
+
+  function onResizeWInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!Number.isFinite(v) || v < 1) return;
+    resizeW = Math.min(CANVAS_WIDTH, v);
+    if (lockAspect && srcWidth > 0) {
+      resizeH = Math.max(1, Math.min(CANVAS_HEIGHT, Math.round(srcHeight * resizeW / srcWidth)));
+    }
+  }
+  function onResizeHInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!Number.isFinite(v) || v < 1) return;
+    resizeH = Math.min(CANVAS_HEIGHT, v);
+    if (lockAspect && srcHeight > 0) {
+      resizeW = Math.max(1, Math.min(CANVAS_WIDTH, Math.round(srcWidth * resizeH / srcHeight)));
+    }
+  }
+  function fitToCanvas() {
+    if (!srcWidth || !srcHeight) return;
+    const maxW = Math.max(1, CANVAS_WIDTH - originX);
+    const maxH = Math.max(1, CANVAS_HEIGHT - originY);
+    const ratio = Math.min(maxW / srcWidth, maxH / srcHeight, 1);
+    resizeW = Math.max(1, Math.floor(srcWidth * ratio));
+    resizeH = Math.max(1, Math.floor(srcHeight * ratio));
+  }
+  function resetSize() {
+    resizeW = srcWidth;
+    resizeH = srcHeight;
   }
 
   $effect(() => { if (open && paletteIndices) renderPreview(); });
@@ -97,7 +140,7 @@
     if (!paletteIndices) return 'No image loaded.';
     if (!Number.isInteger(originX) || !Number.isInteger(originY)) return 'X and Y must be integers.';
     if (originX < 0 || originY < 0) return 'X and Y must be ≥ 0.';
-    if (originX + srcWidth > CANVAS_WIDTH || originY + srcHeight > CANVAS_HEIGHT) {
+    if (originX + resizeW > CANVAS_WIDTH || originY + resizeH > CANVAS_HEIGHT) {
       return `Image would overflow canvas (${CANVAS_WIDTH}x${CANVAS_HEIGHT}).`;
     }
     return null;
@@ -108,8 +151,8 @@
     for (let i = 0; i < paletteIndices.length; i++) {
       const color = paletteIndices[i];
       if (color < 0) continue;
-      const lx = i % srcWidth;
-      const ly = (i / srcWidth) | 0;
+      const lx = i % resizeW;
+      const ly = (i / resizeW) | 0;
       const x = originX + lx;
       const y = originY + ly;
       if (skipMatching && getCommittedColor?.(x, y) === color) continue;
@@ -197,9 +240,27 @@
           <canvas bind:this={previewEl} class="preview"></canvas>
         </div>
         <div class="meta">
-          <div>{srcWidth} × {srcHeight}</div>
-          <div>{opaqueCount} / {srcWidth * srcHeight} opaque</div>
+          <div>source: {srcWidth} × {srcHeight}</div>
+          <div>output: {resizeW} × {resizeH}</div>
+          <div>{opaqueCount} / {resizeW * resizeH} opaque</div>
         </div>
+      </div>
+
+      <div class="row">
+        <label>W <input type="number" min="1" max={CANVAS_WIDTH} value={resizeW} oninput={onResizeWInput} /></label>
+        <label>H <input type="number" min="1" max={CANVAS_HEIGHT} value={resizeH} oninput={onResizeHInput} /></label>
+        <label class="chk" title="Lock aspect ratio to source"><input type="checkbox" bind:checked={lockAspect} /> lock</label>
+      </div>
+      <div class="row">
+        <label>Method
+          <select bind:value={resampleMethod}>
+            <option value="nearest">nearest</option>
+            <option value="bilinear">bilinear</option>
+            <option value="box">box</option>
+          </select>
+        </label>
+        <button onclick={fitToCanvas} title="Fit within canvas at current origin">Fit</button>
+        <button onclick={resetSize} title="Reset to source dimensions">1:1</button>
       </div>
 
       <div class="row">
@@ -279,6 +340,8 @@
 
   label { display: flex; align-items: center; gap: 6px; }
   input[type="number"] { width: 70px; padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }
+  select { padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }
+  .chk { font-size: 0.8rem; color: #aaa; cursor: pointer; }
 
   .file-btn {
     display: inline-block; padding: 6px 12px; background: #2563eb; border-radius: 6px;
