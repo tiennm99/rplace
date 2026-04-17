@@ -8,9 +8,10 @@ export const BITS_PER_PIXEL = 5;
 export const MAX_COLORS = 32;
 
 /** Rate limiting — stackable credit system */
-export const MAX_BATCH_SIZE = 512;
 export const CREDIT_REGEN_RATE = 1; // credits per second
 export const MAX_CREDITS = 256;
+// Batch cannot exceed credits cap — anything larger is guaranteed-rejected by rate-limit.
+export const MAX_BATCH_SIZE = MAX_CREDITS;
 
 /** Redis keys */
 export const REDIS_KEY_PREFIX = 'rplace:';

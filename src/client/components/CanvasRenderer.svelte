@@ -1,19 +1,21 @@
 <script>
   import { onMount } from 'svelte';
-  import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA } from '../../lib/constants.js';
+  import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA, MAX_BATCH_SIZE } from '../../lib/constants.js';
   import { decodeCanvas, indicesToRgba } from '../../lib/canvas-decoder.js';
   import { createPixelBuffer } from '../../lib/pixel-buffer.js';
 
-  let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange } = $props();
+  let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull } = $props();
 
   let canvasEl;
   let imageData = null;
-  /** Committed color index per pixel (server-confirmed state) */
-  let committedColors = null;
+  /** Committed color index per pixel (server-confirmed state). Allocated upfront so WS
+   *  updates that arrive during the initial canvas fetch don't null-deref. */
+  let committedColors = new Uint8Array(CANVAS_WIDTH * CANVAS_HEIGHT);
   let pan = { x: 0, y: 0 };
   let dragging = $state(false);
   let lastMouse = { x: 0, y: 0 };
   let loading = $state(true);
+  let loadError = $state(null);
 
   // Active stroke being drawn (not yet in buffer)
   let currentStroke = [];
@@ -28,18 +30,19 @@
   let touchStartTime = 0;
   let touchMoved = false;
 
-  function render() {
+  function render(effZoom = zoom) {
     if (!canvasEl || !imageData) return;
+    const dpr = window.devicePixelRatio || 1;
     const ctx = canvasEl.getContext('2d');
     ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // reset before clear
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
     offCtx.putImageData(imageData, 0, 0);
-    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // CSS pixels → device pixels
     ctx.translate(pan.x, pan.y);
-    ctx.scale(zoom, zoom);
+    ctx.scale(effZoom, effZoom);
     ctx.drawImage(offscreen, 0, 0);
-    ctx.restore();
   }
 
   function screenToCanvas(clientX, clientY) {
@@ -60,7 +63,7 @@
   }
 
   function notifyBuffer() {
-    onBufferChange({
+    onBufferChange?.({
       canUndo: buffer.canUndo, canRedo: buffer.canRedo, pixelCount: buffer.pixelCount,
     });
   }
@@ -71,10 +74,20 @@
     setPixelRgba(x, y, pending >= 0 ? pending : committedColors[y * CANVAS_WIDTH + x]);
   }
 
+  function totalPendingPixels() {
+    return buffer.pixelCount + currentStrokeKeys.size;
+  }
+
   function addToStroke(x, y) {
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return;
     const key = y * 65536 + x;
     if (currentStrokeKeys.has(key)) return;
+    // Cap unique pending pixels at MAX_BATCH_SIZE — prevents OOM on long draws and matches server limit.
+    // Don't block if this coord is already in buffer (overwrite doesn't grow total).
+    if (totalPendingPixels() >= MAX_BATCH_SIZE && buffer.getColorAt(x, y) < 0) {
+      onBufferFull?.();
+      return;
+    }
     currentStrokeKeys.add(key);
     currentStroke.push({ x, y, color: selectedColor });
     setPixelRgba(x, y, selectedColor);
@@ -87,6 +100,14 @@
     currentStroke = [];
     currentStrokeKeys = new Set();
     notifyBuffer();
+  }
+
+  function cancelStroke() {
+    if (!currentStroke.length) return;
+    for (const { x, y } of currentStroke) restorePixel(x, y);
+    currentStroke = [];
+    currentStrokeKeys = new Set();
+    render();
   }
 
   // --- Public API (called by App.svelte) ---
@@ -138,6 +159,10 @@
     }
     buffer.clear();
     notifyBuffer();
+  }
+
+  export async function refetchCanvas() {
+    await loadCanvas();
   }
 
   // --- Mouse handlers ---
@@ -205,7 +230,8 @@
     const newZoom = Math.max(0.25, Math.min(64, zoom * factor));
     pan.x = e.clientX - (e.clientX - pan.x) * (newZoom / zoom);
     pan.y = e.clientY - (e.clientY - pan.y) * (newZoom / zoom);
-    onZoomChange(newZoom);
+    if (newZoom !== zoom) onZoomChange(newZoom);
+    render(newZoom); // explicit — covers the case where zoom was clamped
   }
 
   // --- Touch handlers ---
@@ -244,8 +270,13 @@
       const dy = e.touches[0].clientY - lastMouse.y;
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) touchMoved = true;
 
+      const pos = screenToCanvas(e.touches[0].clientX, e.touches[0].clientY);
+      onCursorMove({
+        x: Math.max(0, Math.min(pos.x, CANVAS_WIDTH - 1)),
+        y: Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1)),
+      });
+
       if (mode === 'draw') {
-        const pos = screenToCanvas(e.touches[0].clientX, e.touches[0].clientY);
         addToStroke(pos.x, pos.y);
         lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       } else {
@@ -266,7 +297,8 @@
       pan.y += center.y - lastMouse.y;
       lastTouchDist = dist;
       lastMouse = center;
-      onZoomChange(newZoom);
+      if (newZoom !== zoom) onZoomChange(newZoom);
+      render(newZoom);
     }
   }
 
@@ -281,31 +313,49 @@
     }
   }
 
-  // Re-render when zoom changes
+  // Cancel any in-progress stroke on mode change to avoid merging across modes.
+  $effect(() => {
+    mode;
+    if (currentStroke.length) cancelStroke();
+  });
+
+  // Re-render when zoom changes (effect runs after parent prop update)
   $effect(() => { zoom; render(); });
 
-  onMount(async () => {
-    function resize() {
-      canvasEl.width = window.innerWidth;
-      canvasEl.height = window.innerHeight;
-      render();
-    }
-    resize();
-    window.addEventListener('resize', resize);
-
+  async function loadCanvas() {
+    loading = true;
+    loadError = null;
     try {
       const res = await fetch('/api/canvas');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = await res.arrayBuffer();
       const indices = decodeCanvas(buf);
-      committedColors = new Uint8Array(indices);
+      committedColors = new Uint8Array(indices); // replace pre-allocated zero array
       const rgba = indicesToRgba(indices);
       imageData = new ImageData(rgba, CANVAS_WIDTH, CANVAS_HEIGHT);
       render();
     } catch (err) {
       console.error('Failed to load canvas:', err);
+      loadError = err.message || String(err);
     } finally {
       loading = false;
     }
+  }
+
+  onMount(() => {
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvasEl.width = window.innerWidth * dpr;
+      canvasEl.height = window.innerHeight * dpr;
+      canvasEl.style.width = `${window.innerWidth}px`;
+      canvasEl.style.height = `${window.innerHeight}px`;
+      render();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Async load runs in background — onMount cleanup must be sync to avoid leaking listener.
+    loadCanvas();
 
     return () => window.removeEventListener('resize', resize);
   });
@@ -314,6 +364,12 @@
 <div class="canvas-container">
   {#if loading}
     <div class="loading">Loading canvas...</div>
+  {/if}
+  {#if loadError}
+    <div class="error">
+      <div>Failed to load canvas: {loadError}</div>
+      <button onclick={loadCanvas}>Retry</button>
+    </div>
   {/if}
   <canvas
     bind:this={canvasEl}
@@ -332,13 +388,29 @@
 <style>
   .canvas-container { width: 100%; height: 100%; }
   canvas { display: block; }
-  .loading {
+  .loading, .error {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 1.5rem;
-    color: #888;
+    font-size: 1.2rem;
+    color: #ccc;
     z-index: 5;
+    text-align: center;
+  }
+  .error {
+    background: rgba(40, 0, 0, 0.92);
+    border: 1px solid #a33;
+    padding: 16px 24px;
+    border-radius: 8px;
+  }
+  .error button {
+    margin-top: 10px;
+    padding: 6px 14px;
+    background: #a33;
+    color: #fff;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
   }
 </style>

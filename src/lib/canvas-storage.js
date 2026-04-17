@@ -26,6 +26,7 @@ export async function getFullCanvas(env) {
   }
 
   if (bytes.length < CANVAS_BYTES) {
+    console.warn(`Canvas read truncated: got ${bytes.length} bytes, expected ${CANVAS_BYTES}; zero-padding tail`);
     const padded = new Uint8Array(CANVAS_BYTES);
     padded.set(bytes);
     return padded;

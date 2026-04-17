@@ -3,13 +3,19 @@ import { MAX_CREDITS, CREDIT_REGEN_RATE, REDIS_KEY_PREFIX } from './constants.js
 
 /**
  * Lua script for atomic check-and-deduct of stackable credits.
- * Returns: [allowed (0/1), remaining, retryAfter]
+ * Stores lastUpdate as ms (avoids fractional credit loss across calls).
+ * Returns: [allowed (0/1), remaining, retryAfterSeconds]
  */
 const CREDIT_SCRIPT = `
-local data = redis.call('HGETALL', KEYS[1])
-local lastUpdate = 0
-local credits = tonumber(ARGV[3])
+local now = tonumber(ARGV[2])
+local maxCredits = tonumber(ARGV[3])
+local regen = tonumber(ARGV[4])
+local count = tonumber(ARGV[1])
 
+local lastUpdate = now
+local credits = maxCredits
+
+local data = redis.call('HGETALL', KEYS[1])
 if #data > 0 then
   for i = 1, #data, 2 do
     if data[i] == 'lu' then lastUpdate = tonumber(data[i+1]) end
@@ -17,16 +23,28 @@ if #data > 0 then
   end
 end
 
-local elapsed = tonumber(ARGV[2]) - lastUpdate
-local accrued = math.min(tonumber(ARGV[3]), credits + math.floor(elapsed * tonumber(ARGV[4])))
-local count = tonumber(ARGV[1])
+local elapsedMs = now - lastUpdate
+local msPerCredit = 1000 / regen
+local accruedDelta = math.floor(elapsedMs / msPerCredit)
+local accrued = math.min(maxCredits, credits + accruedDelta)
 
 if accrued < count then
-  return {0, accrued, count - accrued}
+  local deficit = count - accrued
+  local retryAfter = math.ceil(deficit * msPerCredit / 1000)
+  return {0, accrued, retryAfter}
+end
+
+-- Advance lastUpdate by exact ms used to accrue credits (preserves fractional residue).
+-- When capped at maxCredits, discard residue (else lu drifts arbitrarily far back).
+local newLastUpdate
+if credits + accruedDelta > maxCredits then
+  newLastUpdate = now
+else
+  newLastUpdate = lastUpdate + math.floor(accruedDelta * msPerCredit)
 end
 
 local remaining = accrued - count
-redis.call('HSET', KEYS[1], 'lu', ARGV[2], 'cr', remaining)
+redis.call('HSET', KEYS[1], 'lu', newLastUpdate, 'cr', remaining)
 redis.call('EXPIRE', KEYS[1], 86400)
 return {1, remaining, 0}
 `;
@@ -37,16 +55,17 @@ return {1, remaining, 0}
  * @param {string} userId
  * @param {number} count
  * @returns {Promise<{allowed: boolean, remaining: number, retryAfter: number}>}
+ *   retryAfter is in seconds.
  */
 export async function checkAndDeductCredits(env, userId, count) {
   const redis = getRedis(env);
-  const now = Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
   const key = `${REDIS_KEY_PREFIX}credits:${userId}`;
 
   const result = await redis.eval(
     CREDIT_SCRIPT,
     [key],
-    [count, now, MAX_CREDITS, CREDIT_REGEN_RATE],
+    [count, nowMs, MAX_CREDITS, CREDIT_REGEN_RATE],
   );
 
   return {
