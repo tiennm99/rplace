@@ -179,10 +179,12 @@
   <ColorPicker {selectedColor} onSelect={(i) => selectedColor = i} />
   <UserInfo {credits} />
 
-  <button class="import-btn" onclick={() => importerOpen = !importerOpen}
-    title="Upload an image and place it on the canvas">
-    {importerOpen ? 'Close Import' : 'Import Image'}
-  </button>
+  {#if !importerOpen}
+    <button class="import-btn" onclick={() => importerOpen = true}
+      title="Upload an image and place it on the canvas">
+      Import Image
+    </button>
+  {/if}
 
   <ImageImporter
     open={importerOpen}
@@ -222,8 +224,8 @@
 
   .import-btn {
     position: fixed;
-    top: 12px;
-    right: 12px;
+    top: 68px;
+    right: 16px;
     padding: 8px 14px;
     background: rgba(37, 99, 235, 0.9);
     border: 1px solid #3b82f6;
@@ -232,7 +234,7 @@
     font-size: 0.9rem;
     border-radius: 8px;
     cursor: pointer;
-    z-index: 25;
+    z-index: 15;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   }
   .import-btn:hover { background: #1d4ed8; }

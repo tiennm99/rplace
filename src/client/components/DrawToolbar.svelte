@@ -30,7 +30,7 @@
 <style>
   .toolbar {
     position: fixed;
-    bottom: 80px;
+    bottom: 188px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -104,7 +104,6 @@
 
   @media (max-width: 600px) {
     .toolbar {
-      bottom: 72px;
       padding: 6px 8px;
       gap: 4px;
     }
