@@ -3,6 +3,7 @@
   import { rgbaToPalette, paletteToRgba, DITHER_METHODS } from '../../lib/image-to-palette.js';
   import { resizeRgba } from '../../lib/image-resize.js';
   import { transformRgba } from '../../lib/image-transform.js';
+  import { applyColorCorrection } from '../../lib/image-color-correction.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
 
   let { open, cursorPos, getCommittedColor, setOverlay, onClose, onCredits } = $props();
@@ -40,6 +41,13 @@
   let flipH = $state(false);
   let flipV = $state(false);
   let rotation = $state(0); // 0 | 90 | 180 | 270
+
+  // Color correction
+  let brightness = $state(0);    // -100..+100
+  let contrast = $state(0);      // -100..+100
+  let saturation = $state(0);    // -100..+100
+  let gamma = $state(1);          // 0.1..3.0
+  let correctionOpen = $state(false); // collapsible
 
   // Run state
   let status = $state('idle'); // 'idle' | 'running' | 'paused' | 'done' | 'error'
@@ -97,7 +105,10 @@
     const resized = (resizeW === transformed.width && resizeH === transformed.height)
       ? transformed.rgba
       : resizeRgba(transformed.rgba, transformed.width, transformed.height, resizeW, resizeH, resampleMethod);
-    const idx = rgbaToPalette(resized, resizeW, resizeH, { method: ditherMethod });
+    const corrected = (brightness !== 0 || contrast !== 0 || saturation !== 0 || gamma !== 1)
+      ? applyColorCorrection(resized, resizeW, resizeH, { brightness, contrast, saturation, gamma })
+      : resized;
+    const idx = rgbaToPalette(corrected, resizeW, resizeH, { method: ditherMethod });
     paletteIndices = idx;
     let count = 0;
     for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
@@ -158,6 +169,13 @@
       if (swap) { const tmp = resizeW; resizeW = resizeH; resizeH = tmp; }
       rotation = 0;
     }
+  }
+
+  function resetCorrection() {
+    brightness = 0;
+    contrast = 0;
+    saturation = 0;
+    gamma = 1;
   }
 
   $effect(() => { if (open && paletteIndices) renderPreview(); });
@@ -354,6 +372,39 @@
         </label>
       </div>
 
+      <div class="section">
+        <button class="section-head" onclick={() => correctionOpen = !correctionOpen}>
+          {correctionOpen ? '▾' : '▸'} Color correction
+          {#if brightness || contrast || saturation || gamma !== 1}<span class="badge">on</span>{/if}
+        </button>
+        {#if correctionOpen}
+          <div class="slider-row">
+            <span class="lbl">brightness</span>
+            <input type="range" min="-100" max="100" step="1" bind:value={brightness} />
+            <span class="val">{brightness}</span>
+          </div>
+          <div class="slider-row">
+            <span class="lbl">contrast</span>
+            <input type="range" min="-100" max="100" step="1" bind:value={contrast} />
+            <span class="val">{contrast}</span>
+          </div>
+          <div class="slider-row">
+            <span class="lbl">saturation</span>
+            <input type="range" min="-100" max="100" step="1" bind:value={saturation} />
+            <span class="val">{saturation}</span>
+          </div>
+          <div class="slider-row">
+            <span class="lbl">gamma</span>
+            <input type="range" min="0.1" max="3" step="0.05" bind:value={gamma} />
+            <span class="val">{gamma.toFixed(2)}</span>
+          </div>
+          <div class="row">
+            <button onclick={resetCorrection}
+              disabled={!brightness && !contrast && !saturation && gamma === 1}>Reset</button>
+          </div>
+        {/if}
+      </div>
+
       {#if total > 0}
         <div class="progress">
           <div class="bar"><div class="fill" style="width: {pct}%"></div></div>
@@ -429,6 +480,19 @@
   .row button:hover:not(:disabled) { background: #333; }
   .row button:disabled { opacity: 0.35; cursor: default; }
   .row button.active { background: #2d4d78; border-color: #3b6ba8; color: #fff; }
+
+  .section { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #2a2a2a; padding-top: 8px; }
+  .section-head {
+    display: flex; align-items: center; gap: 6px; padding: 2px 0;
+    background: transparent; border: 0; color: #ddd; cursor: pointer;
+    font-size: 0.9rem; text-align: left;
+  }
+  .section-head:hover { color: #fff; }
+  .badge { background: #2d4d78; color: #fff; font-size: 0.7rem; padding: 1px 6px; border-radius: 8px; }
+
+  .slider-row { display: flex; align-items: center; gap: 8px; }
+  .slider-row input[type="range"] { flex: 1; }
+  .slider-row .val { font-size: 0.8rem; color: #aaa; min-width: 34px; text-align: right; }
 
   .file-btn {
     display: inline-block; padding: 6px 12px; background: #2563eb; border-radius: 6px;

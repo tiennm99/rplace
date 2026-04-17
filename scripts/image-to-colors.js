@@ -16,6 +16,7 @@ import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../src/lib/constants.js';
 import { rgbaToPalette } from '../src/lib/image-to-palette.js';
 import { resizeRgba } from '../src/lib/image-resize.js';
 import { transformRgba } from '../src/lib/image-transform.js';
+import { applyColorCorrection } from '../src/lib/image-color-correction.js';
 
 const { values, positionals } = parseArgs({
   args: process.argv.slice(2),
@@ -30,12 +31,16 @@ const { values, positionals } = parseArgs({
     'flip-h': { type: 'boolean', default: false },
     'flip-v': { type: 'boolean', default: false },
     rotate: { type: 'string', default: '0' }, // 0 | 90 | 180 | 270 (CW)
+    brightness: { type: 'string', default: '0' },
+    contrast: { type: 'string', default: '0' },
+    saturation: { type: 'string', default: '0' },
+    gamma: { type: 'string', default: '1' },
   },
   allowPositionals: true,
 });
 
 if (positionals.length < 1) {
-  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither|--dither-method <name>] [--width N] [--height N] [--method nearest|bilinear|box] [--flip-h] [--flip-v] [--rotate 0|90|180|270]');
+  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither|--dither-method <name>] [--width N] [--height N] [--method nearest|bilinear|box] [--flip-h] [--flip-v] [--rotate 0|90|180|270] [--brightness -100..100] [--contrast -100..100] [--saturation -100..100] [--gamma 0.1..3]');
   process.exit(1);
 }
 
@@ -80,9 +85,18 @@ if (outW > CANVAS_WIDTH || outH > CANVAS_HEIGHT) {
   console.warn(`Warning: output ${outW}x${outH} exceeds canvas ${CANVAS_WIDTH}x${CANVAS_HEIGHT}. Upload will fail at the boundary.`);
 }
 
-const working = (outW === srcW && outH === srcH)
+const resized = (outW === srcW && outH === srcH)
   ? transformed.rgba
   : resizeRgba(transformed.rgba, srcW, srcH, outW, outH, values.method);
+
+const brightness = parseFloat(values.brightness);
+const contrast = parseFloat(values.contrast);
+const saturation = parseFloat(values.saturation);
+const gamma = parseFloat(values.gamma);
+const hasCorrection = brightness !== 0 || contrast !== 0 || saturation !== 0 || gamma !== 1;
+const working = hasCorrection
+  ? applyColorCorrection(resized, outW, outH, { brightness, contrast, saturation, gamma })
+  : resized;
 
 // sharp raw buffer has channels=4 after ensureAlpha; same layout as Canvas ImageData.
 const ditherMethod = values['dither-method'] ?? (values.dither ? 'floyd' : 'none');

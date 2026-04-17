@@ -19,7 +19,7 @@ Grow the in-app Image Import panel into a full pre-placement pipeline: resize, t
 | 2 | [Overlay preview on canvas](phase-02-overlay-preview.md) | Done | High — visualize alignment before spending credits |
 | 3 | [Transforms (flip / rotate)](phase-03-transforms.md) | Done | Medium — quick fixes without re-editing source |
 | 4 | [More dithering algorithms](phase-04-dithering-algorithms.md) | Done | Medium — different looks per source |
-| 5 | [Color correction sliders](phase-05-color-correction.md) | Todo | Medium — photos benefit most |
+| 5 | [Color correction sliders](phase-05-color-correction.md) | Done | Medium — photos benefit most |
 | 6 | [Skip-white + paint-transparent toggles](phase-06-skip-white.md) | Todo | Low — easy win, often useful for logos |
 
 Later / parked: multi-algorithm color distance (Lab/Oklab), Kuwahara smoothing, template save/load, repair mode. Revisit after Phase 6.

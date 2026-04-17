@@ -2,7 +2,7 @@
 
 ## Overview
 - **Priority:** P2 (medium)
-- **Status:** Todo
+- **Status:** Done
 - Sliders to adjust brightness, contrast, saturation, and gamma so photos map better onto our 32-color palette.
 
 ## Key Insights
@@ -43,10 +43,10 @@ srcRgba → transform → colorCorrect → resize → palette
 4. CLI flags.
 
 ## Todo
-- [ ] `image-color-correction.js` + tests
-- [ ] Sliders + reset button
-- [ ] CLI flags
-- [ ] Verify no jank on 512×512 with live slider
+- [x] `image-color-correction.js` + 9 tests
+- [x] Collapsible section with 4 sliders + reset
+- [x] CLI `--brightness`, `--contrast`, `--saturation`, `--gamma`
+- [x] Inserted post-resize (before palette) for slider responsiveness on large sources
 
 ## Success Criteria
 - Default sliders → output identical to previous pipeline (regression guard).
