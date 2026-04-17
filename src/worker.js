@@ -11,23 +11,23 @@ const app = new Hono();
 // ~64 bytes is generous per pixel JSON object {"x":2047,"y":2047,"color":31}
 const MAX_BODY_BYTES = MAX_BATCH_SIZE * 64;
 
-/** GET /api/canvas — full canvas as binary; gzip when supported */
+/** GET /api/canvas — full canvas as binary.
+ * Cloudflare's edge auto-compresses compressible content; we don't set
+ * Content-Encoding manually (caused double-encoding / undecoded blobs
+ * through wrangler dev + vite proxy during testing). */
 app.get('/api/canvas', async (c) => {
-  const buffer = await getFullCanvas(c.env);
-  const acceptsGzip = (c.req.header('accept-encoding') || '').includes('gzip');
-
-  const headers = {
-    'Content-Type': 'application/octet-stream',
-    'Cache-Control': 'public, max-age=10, s-maxage=10, stale-while-revalidate=30',
-    Vary: 'Accept-Encoding',
-  };
-
-  if (acceptsGzip) {
-    const gzStream = new Response(buffer).body.pipeThrough(new CompressionStream('gzip'));
-    headers['Content-Encoding'] = 'gzip';
-    return new Response(gzStream, { headers });
+  try {
+    const buffer = await getFullCanvas(c.env);
+    return new Response(buffer, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': 'public, max-age=10, s-maxage=10, stale-while-revalidate=30',
+      },
+    });
+  } catch (err) {
+    console.error('Canvas read failed:', err);
+    return c.json({ error: 'canvas_read_failed', message: String(err) }, 500);
   }
-  return new Response(buffer, { headers });
 });
 
 /** POST /api/place — batch pixel placement */
