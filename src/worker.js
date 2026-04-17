@@ -8,19 +8,35 @@ export { CanvasRoom } from './durable-objects/canvas-room.js';
 
 const app = new Hono();
 
-/** GET /api/canvas — full canvas as binary */
+// ~64 bytes is generous per pixel JSON object {"x":2047,"y":2047,"color":31}
+const MAX_BODY_BYTES = MAX_BATCH_SIZE * 64;
+
+/** GET /api/canvas — full canvas as binary; gzip when supported */
 app.get('/api/canvas', async (c) => {
   const buffer = await getFullCanvas(c.env);
-  return new Response(buffer, {
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'Cache-Control': 'public, max-age=1, s-maxage=1, stale-while-revalidate=5',
-    },
-  });
+  const acceptsGzip = (c.req.header('accept-encoding') || '').includes('gzip');
+
+  const headers = {
+    'Content-Type': 'application/octet-stream',
+    'Cache-Control': 'public, max-age=10, s-maxage=10, stale-while-revalidate=30',
+    Vary: 'Accept-Encoding',
+  };
+
+  if (acceptsGzip) {
+    const gzStream = new Response(buffer).body.pipeThrough(new CompressionStream('gzip'));
+    headers['Content-Encoding'] = 'gzip';
+    return new Response(gzStream, { headers });
+  }
+  return new Response(buffer, { headers });
 });
 
 /** POST /api/place — batch pixel placement */
 app.post('/api/place', async (c) => {
+  const contentLength = parseInt(c.req.header('content-length') || '0', 10);
+  if (contentLength > MAX_BODY_BYTES) {
+    return c.json({ error: 'body_too_large', max: MAX_BODY_BYTES }, 413);
+  }
+
   let body;
   try {
     body = await c.req.json();
@@ -52,7 +68,7 @@ app.post('/api/place', async (c) => {
   }
 
   // Rate limiting
-  const userId = getUserId(c.req.raw);
+  const userId = await getUserId(c.req.raw);
   const { allowed, remaining, retryAfter } = await checkAndDeductCredits(
     c.env, userId, pixels.length,
   );
@@ -60,7 +76,7 @@ app.post('/api/place', async (c) => {
     return c.json({ error: 'rate_limited', remaining, retryAfter }, 429);
   }
 
-  // Write pixels to canvas + broadcast
+  // Persist pixels (must succeed before broadcast)
   try {
     await setPixels(c.env, pixels);
   } catch (err) {
@@ -68,19 +84,36 @@ app.post('/api/place', async (c) => {
     return c.json({ error: 'storage_failed', message: String(err) }, 500);
   }
 
-  try {
-    const roomId = c.env.CANVAS_ROOM.idFromName('main');
-    const room = c.env.CANVAS_ROOM.get(roomId);
-    await room.fetch(new Request('http://internal/broadcast', {
-      method: 'POST',
-      body: JSON.stringify(pixels),
-    }));
-  } catch (err) {
-    console.error('Broadcast failed:', err);
+  // Broadcast in background — don't block the user response on DO fetch.
+  // In non-CF runtimes (tests), executionCtx is unavailable; fall back to fire-and-forget.
+  const broadcastTask = broadcastPixels(c.env, pixels);
+  let ctx = null;
+  try { ctx = c.executionCtx; } catch { /* no-op */ }
+  if (ctx) {
+    ctx.waitUntil(broadcastTask);
+  } else {
+    broadcastTask.catch((err) => console.error('Broadcast:', err));
   }
 
   return c.json({ ok: true, credits: remaining });
 });
+
+async function broadcastPixels(env, pixels) {
+  try {
+    const roomId = env.CANVAS_ROOM.idFromName('main');
+    const room = env.CANVAS_ROOM.get(roomId);
+    const r = await room.fetch(new Request('http://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify(pixels),
+    }));
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('Broadcast non-OK:', r.status, text);
+    }
+  } catch (err) {
+    console.error('Broadcast threw:', err);
+  }
+}
 
 /** WebSocket upgrade — delegate to Durable Object */
 app.get('/api/ws', async (c) => {

@@ -32,14 +32,30 @@ describe('redisRaw', () => {
     });
   });
 
-  it('throws on non-ok response', async () => {
+  it('returns the response result field', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ result: 'PONG' }),
+    });
+    const result = await redisRaw(env, ['PING']);
+    expect(result).toBe('PONG');
+  });
+
+  it('throws on non-ok HTTP response', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 401,
       text: () => Promise.resolve('Unauthorized'),
     });
+    await expect(redisRaw(env, ['PING'])).rejects.toThrow('Redis HTTP 401');
+  });
 
-    await expect(redisRaw(env, ['PING'])).rejects.toThrow('Redis command failed: 401');
+  it('throws on Upstash 200 with error envelope', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ error: 'ERR wrong number of arguments' }),
+    });
+    await expect(redisRaw(env, ['BITFIELD'])).rejects.toThrow(/Redis error.*wrong number of arguments/);
   });
 });
 
@@ -82,13 +98,20 @@ describe('redisRawBinary', () => {
     expect(result).toBe('AQID');
   });
 
-  it('throws on non-ok response', async () => {
+  it('throws on non-ok HTTP response', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
       text: () => Promise.resolve('Internal Error'),
     });
+    await expect(redisRawBinary(env, ['GET', 'key'])).rejects.toThrow('Redis HTTP 500');
+  });
 
-    await expect(redisRawBinary(env, ['GET', 'key'])).rejects.toThrow('Redis command failed: 500');
+  it('throws on Upstash 200 with error envelope', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ error: 'ERR no such key' }),
+    });
+    await expect(redisRawBinary(env, ['GET', 'missing'])).rejects.toThrow(/Redis error.*no such key/);
   });
 });

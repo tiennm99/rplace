@@ -1,5 +1,5 @@
 <script>
-  import { MAX_CREDITS, CREDIT_REGEN_RATE } from '../lib/constants.js';
+  import { MAX_CREDITS, CREDIT_REGEN_RATE, MAX_BATCH_SIZE } from '../lib/constants.js';
   import CanvasRenderer from './components/CanvasRenderer.svelte';
   import ColorPicker from './components/ColorPicker.svelte';
   import CanvasControls from './components/CanvasControls.svelte';
@@ -13,9 +13,17 @@
   let mode = $state('paint');
   let submitting = $state(false);
   let bufferState = $state({ canUndo: false, canRedo: false, pixelCount: 0 });
+  let toast = $state(null); // { kind: 'error'|'info', text: string }
+  let toastTimer = null;
 
   /** @type {CanvasRenderer} */
   let canvasRenderer;
+
+  function showToast(kind, text, ttlMs = 4000) {
+    toast = { kind, text };
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast = null; }, ttlMs);
+  }
 
   // Client-side credit regeneration (server corrects on submit)
   $effect(() => {
@@ -29,6 +37,7 @@
 
   // WebSocket connection with auto-reconnect + exponential backoff
   let wsRetryDelay = 1000;
+  let isReconnect = false;
 
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -43,7 +52,14 @@
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onopen = () => { wsRetryDelay = 1000; };
+    ws.onopen = () => {
+      // Refetch canvas after a reconnect to recover any pixels missed while disconnected.
+      if (isReconnect && canvasRenderer) {
+        canvasRenderer.refetchCanvas();
+      }
+      wsRetryDelay = 1000;
+      isReconnect = true;
+    };
     ws.onclose = () => {
       setTimeout(connectWebSocket, wsRetryDelay);
       wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
@@ -60,6 +76,8 @@
 
   // Keyboard shortcuts
   function handleKeyDown(e) {
+    // Don't intercept when user is typing in an input
+    if (e.target?.matches?.('input, textarea, [contenteditable]')) return;
     if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
       canvasRenderer?.undo();
@@ -73,6 +91,10 @@
   async function handleSubmit() {
     const pixels = canvasRenderer?.getPendingPixels();
     if (!pixels?.length) return;
+    if (pixels.length > MAX_BATCH_SIZE) {
+      showToast('error', `Batch too large (${pixels.length} > ${MAX_BATCH_SIZE}). Submit fewer pixels.`);
+      return;
+    }
 
     submitting = true;
     try {
@@ -81,23 +103,42 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pixels }),
       });
+
+      let data = null;
       const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch {
-        console.error('Server returned non-JSON:', res.status, text);
+      try { data = JSON.parse(text); } catch { /* non-JSON body */ }
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          const retryAfter = data?.retryAfter ?? '?';
+          if (typeof data?.remaining === 'number') credits = data.remaining;
+          showToast('error', `Rate limited — try again in ${retryAfter}s.`, 6000);
+        } else if (res.status === 413) {
+          showToast('error', 'Request too large. Reduce batch size.');
+        } else if (res.status === 400) {
+          showToast('error', `Rejected: ${data?.error || 'invalid request'}`);
+        } else {
+          showToast('error', `Server error (${res.status}): ${data?.error || text || 'unknown'}`);
+        }
         return;
       }
-      if (data.ok) {
+
+      if (data?.ok) {
         credits = data.credits;
         canvasRenderer.commitPending();
+        showToast('info', 'Submitted', 1500);
       } else {
-        console.warn('Submit rejected:', data.error, data);
+        showToast('error', `Unexpected response: ${data?.error || 'no data'}`);
       }
     } catch (err) {
-      console.error('Submit failed:', err);
+      showToast('error', `Network error: ${err.message || err}`, 6000);
     } finally {
       submitting = false;
     }
+  }
+
+  function handleBufferFull() {
+    showToast('info', `Buffer at max (${MAX_BATCH_SIZE} pixels) — submit or undo to draw more.`, 3000);
   }
 </script>
 
@@ -112,6 +153,7 @@
     onZoomChange={(z) => zoom = z}
     onCursorMove={(pos) => cursorPos = pos}
     onBufferChange={(s) => bufferState = s}
+    onBufferFull={handleBufferFull}
   />
   <CanvasControls
     {zoom}
@@ -134,6 +176,10 @@
   />
   <ColorPicker {selectedColor} onSelect={(i) => selectedColor = i} />
   <UserInfo {credits} />
+
+  {#if toast}
+    <div class="toast {toast.kind}" role="status" aria-live="polite">{toast.text}</div>
+  {/if}
 </main>
 
 <style>
@@ -142,4 +188,19 @@
     height: 100%;
     position: relative;
   }
+  .toast {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    z-index: 30;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    max-width: 90vw;
+    text-align: center;
+  }
+  .toast.error { background: #8b2222; color: #fff; border: 1px solid #a33; }
+  .toast.info { background: #1d3a8a; color: #fff; border: 1px solid #3b5cb8; }
 </style>

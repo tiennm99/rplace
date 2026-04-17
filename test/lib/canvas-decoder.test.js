@@ -1,16 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { decodeCanvas, indicesToRgba } from '../../src/lib/canvas-decoder.js';
-import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS, COLORS_RGBA } from '../../src/lib/constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, BITS_PER_PIXEL, COLORS, COLORS_RGBA } from '../../src/lib/constants.js';
 
-/** Encode color indices into 5-bit packed bytes (test helper, mirrors BITFIELD storage) */
-function encodeIndices(indices) {
-  const totalBits = indices.length * 5;
-  const bytes = new Uint8Array(Math.ceil(totalBits / 8));
+const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
+const EXPECTED_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
+
+/** Encode color indices into 5-bit packed bytes (test helper, mirrors BITFIELD storage).
+ * Returns a full-canvas-sized buffer (zero-padded tail) so decodeCanvas accepts it. */
+function encodeIndicesPadded(indices) {
+  const bytes = new Uint8Array(EXPECTED_BYTES);
   for (let i = 0; i < indices.length; i++) {
     const bitPos = i * 5;
     const byteIndex = bitPos >> 3;
     const bitOffset = bitPos & 7;
-    // Write 5-bit value across 1-2 bytes
     bytes[byteIndex] |= (indices[i] << (11 - bitOffset)) >> 8;
     if (bitOffset > 3) {
       bytes[byteIndex + 1] |= (indices[i] << (11 - bitOffset)) & 0xff;
@@ -22,17 +24,22 @@ function encodeIndices(indices) {
 }
 
 describe('decodeCanvas', () => {
-  it('decodes empty buffer as all zeros', () => {
-    const buffer = new ArrayBuffer(0);
+  it('decodes a full zero-filled buffer as all zeros', () => {
+    const buffer = new ArrayBuffer(EXPECTED_BYTES);
     const indices = decodeCanvas(buffer);
-    expect(indices.length).toBe(CANVAS_WIDTH * CANVAS_HEIGHT);
+    expect(indices.length).toBe(TOTAL_PIXELS);
     expect(indices.every((v) => v === 0)).toBe(true);
   });
 
+  it('throws on truncated buffer', () => {
+    expect(() => decodeCanvas(new ArrayBuffer(0))).toThrow(/truncated/);
+    expect(() => decodeCanvas(new ArrayBuffer(EXPECTED_BYTES - 1))).toThrow(/truncated/);
+  });
+
   it('decodes a single pixel', () => {
-    // Color 15 at pixel 0: binary 01111 in first 5 bits
-    // Byte 0: 0111_1000 = 0x78
-    const bytes = new Uint8Array([0x78, 0]);
+    // Color 15 at pixel 0: binary 01111 in first 5 bits → byte 0 = 0111_1000 = 0x78
+    const bytes = new Uint8Array(EXPECTED_BYTES);
+    bytes[0] = 0x78;
     const indices = decodeCanvas(bytes.buffer);
     expect(indices[0]).toBe(15);
   });
@@ -40,7 +47,7 @@ describe('decodeCanvas', () => {
   it('round-trips all 32 color values', () => {
     const input = new Uint8Array(32);
     for (let i = 0; i < 32; i++) input[i] = i;
-    const encoded = encodeIndices(input);
+    const encoded = encodeIndicesPadded(input);
     const decoded = decodeCanvas(encoded.buffer);
     for (let i = 0; i < 32; i++) {
       expect(decoded[i]).toBe(i);
@@ -50,7 +57,7 @@ describe('decodeCanvas', () => {
   it('round-trips repeated color patterns', () => {
     const input = new Uint8Array(100);
     for (let i = 0; i < 100; i++) input[i] = i % 32;
-    const encoded = encodeIndices(input);
+    const encoded = encodeIndicesPadded(input);
     const decoded = decodeCanvas(encoded.buffer);
     for (let i = 0; i < 100; i++) {
       expect(decoded[i]).toBe(i % 32);
@@ -59,7 +66,7 @@ describe('decodeCanvas', () => {
 
   it('handles max color value (31) at various offsets', () => {
     const input = new Uint8Array(8).fill(31);
-    const encoded = encodeIndices(input);
+    const encoded = encodeIndicesPadded(input);
     const decoded = decodeCanvas(encoded.buffer);
     for (let i = 0; i < 8; i++) {
       expect(decoded[i]).toBe(31);

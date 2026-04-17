@@ -17,6 +17,7 @@ export function getRedis(env) {
  * Useful for commands where the SDK API is unreliable (e.g., BITFIELD).
  * @param {object} env
  * @param {string[]} command - Redis command as array, e.g. ['BITFIELD', 'key', 'SET', ...]
+ * @returns {Promise<*>} the `result` field from the Upstash response
  */
 export async function redisRaw(env, command) {
   const res = await fetch(env.UPSTASH_REDIS_REST_URL, {
@@ -29,9 +30,14 @@ export async function redisRaw(env, command) {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Redis command failed: ${res.status} ${text}`);
+    throw new Error(`Redis HTTP ${res.status}: ${text}`);
   }
-  return res.json();
+  // Upstash returns 200 with {"error":"..."} for application errors.
+  const body = await res.json();
+  if (body && body.error) {
+    throw new Error(`Redis error: ${body.error}`);
+  }
+  return body.result;
 }
 
 /**
@@ -51,8 +57,11 @@ export async function redisRawBinary(env, command) {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Redis command failed: ${res.status} ${text}`);
+    throw new Error(`Redis HTTP ${res.status}: ${text}`);
   }
-  const { result } = await res.json();
-  return result; // base64-encoded string
+  const body = await res.json();
+  if (body && body.error) {
+    throw new Error(`Redis error: ${body.error}`);
+  }
+  return body.result; // base64-encoded string
 }

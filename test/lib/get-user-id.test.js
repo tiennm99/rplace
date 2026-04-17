@@ -9,27 +9,32 @@ function mockRequest(headers = {}) {
 }
 
 describe('getUserId', () => {
-  it('returns anon: prefix', () => {
-    const id = getUserId(mockRequest({ 'cf-connecting-ip': '1.2.3.4' }));
+  it('returns anon: prefix', async () => {
+    const id = await getUserId(mockRequest({ 'cf-connecting-ip': '1.2.3.4' }));
     expect(id).toMatch(/^anon:/);
   });
 
-  it('returns deterministic ID for same IP', () => {
-    const req1 = mockRequest({ 'cf-connecting-ip': '192.168.1.1' });
-    const req2 = mockRequest({ 'cf-connecting-ip': '192.168.1.1' });
-    expect(getUserId(req1)).toBe(getUserId(req2));
+  it('returns deterministic ID for same IP', async () => {
+    const id1 = await getUserId(mockRequest({ 'cf-connecting-ip': '192.168.1.1' }));
+    const id2 = await getUserId(mockRequest({ 'cf-connecting-ip': '192.168.1.1' }));
+    expect(id1).toBe(id2);
   });
 
-  it('returns different IDs for different IPs', () => {
-    const id1 = getUserId(mockRequest({ 'cf-connecting-ip': '1.1.1.1' }));
-    const id2 = getUserId(mockRequest({ 'cf-connecting-ip': '2.2.2.2' }));
+  it('returns different IDs for different IPs', async () => {
+    const id1 = await getUserId(mockRequest({ 'cf-connecting-ip': '1.1.1.1' }));
+    const id2 = await getUserId(mockRequest({ 'cf-connecting-ip': '2.2.2.2' }));
     expect(id1).not.toBe(id2);
   });
 
-  it('falls back to 127.0.0.1 when header is missing', () => {
-    const id = getUserId(mockRequest({}));
-    expect(id).toMatch(/^anon:/);
-    // Should be deterministic for missing header too
-    expect(getUserId(mockRequest({}))).toBe(id);
+  it('falls back to a shared dev bucket when header is missing', async () => {
+    const id = await getUserId(mockRequest({}));
+    expect(id).toBe('anon:dev');
+    // Deterministic for missing header
+    expect(await getUserId(mockRequest({}))).toBe(id);
+  });
+
+  it('uses 16-hex-char (8-byte) suffix from SHA-256', async () => {
+    const id = await getUserId(mockRequest({ 'cf-connecting-ip': '203.0.113.45' }));
+    expect(id).toMatch(/^anon:[0-9a-f]{16}$/);
   });
 });
