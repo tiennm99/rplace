@@ -26,6 +26,9 @@
   let originY = $state(0);
   let skipMatching = $state(true);
   let ditherMethod = $state('none'); // see DITHER_METHODS
+  let skipWhite = $state(false);
+  let whiteThreshold = $state(230);
+  let paintTransparent = $state(false);
 
   // Resize controls — init to source dims on file load
   let resizeW = $state(0);
@@ -108,7 +111,11 @@
     const corrected = (brightness !== 0 || contrast !== 0 || saturation !== 0 || gamma !== 1)
       ? applyColorCorrection(resized, resizeW, resizeH, { brightness, contrast, saturation, gamma })
       : resized;
-    const idx = rgbaToPalette(corrected, resizeW, resizeH, { method: ditherMethod });
+    const idx = rgbaToPalette(corrected, resizeW, resizeH, {
+      method: ditherMethod,
+      skipWhite, whiteThreshold,
+      paintTransparent,
+    });
     paletteIndices = idx;
     let count = 0;
     for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
@@ -361,6 +368,25 @@
       <label class="row checkbox">
         <input type="checkbox" bind:checked={skipMatching} />
         Skip pixels that already match
+      </label>
+
+      <div class="row">
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={skipWhite} />
+          Skip white
+        </label>
+        {#if skipWhite}
+          <label style="flex: 1;">
+            threshold
+            <input type="range" min="128" max="255" step="1" bind:value={whiteThreshold} />
+            <span class="val" style="min-width: 28px;">{whiteThreshold}</span>
+          </label>
+        {/if}
+      </div>
+
+      <label class="row checkbox" title="Treat fully-transparent source pixels as opaque white before quantizing.">
+        <input type="checkbox" bind:checked={paintTransparent} />
+        Paint transparent as white
       </label>
       <div class="row">
         <label>Dither

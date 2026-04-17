@@ -38,20 +38,59 @@ export function nearestColorIndex(r, g, b) {
  * @param {number} [options.alphaThreshold=128]
  * @param {boolean} [options.dither=false] - legacy; prefer `method`
  * @param {('none'|'floyd'|'atkinson'|'jarvis'|'burkes'|'sierra'|'sierra-lite'|'bayer-2'|'bayer-4'|'bayer-8')} [options.method]
+ * @param {boolean} [options.skipWhite=false] - mark near-white source pixels as transparent
+ * @param {number}  [options.whiteThreshold=230] - r,g,b >= this counts as "white"
+ * @param {boolean} [options.paintTransparent=false] - treat transparent pixels as opaque white before quantizing
  * @returns {Int16Array} length = width*height
  */
 export function rgbaToPalette(rgba, width, height, options = {}) {
-  const { alphaThreshold = 128, dither = false } = options;
+  const {
+    alphaThreshold = 128,
+    dither = false,
+    skipWhite = false,
+    whiteThreshold = 230,
+    paintTransparent = false,
+  } = options;
   const method = options.method ?? (dither ? 'floyd' : 'none');
 
-  if (method === 'none') return quantizeNearest(rgba, width, height, alphaThreshold);
-  if (ERROR_DIFFUSION_KERNELS[method]) {
-    return runErrorDiffusion(rgba, width, height, alphaThreshold, ERROR_DIFFUSION_KERNELS[method]);
+  // Substitute transparent→opaque white up-front so the rest of the pipeline
+  // sees a consistent buffer. We only clone when substitutions actually occur.
+  let working = rgba;
+  if (paintTransparent) {
+    const cloned = new Uint8ClampedArray(rgba);
+    let changed = false;
+    for (let i = 0; i < cloned.length; i += 4) {
+      if (cloned[i + 3] < alphaThreshold) {
+        cloned[i] = 255; cloned[i + 1] = 255; cloned[i + 2] = 255; cloned[i + 3] = 255;
+        changed = true;
+      }
+    }
+    if (changed) working = cloned;
   }
-  if (BAYER_MATRICES[method]) {
-    return runOrderedDither(rgba, width, height, alphaThreshold, BAYER_MATRICES[method]);
+
+  let out;
+  if (method === 'none') {
+    out = quantizeNearest(working, width, height, alphaThreshold);
+  } else if (ERROR_DIFFUSION_KERNELS[method]) {
+    out = runErrorDiffusion(working, width, height, alphaThreshold, ERROR_DIFFUSION_KERNELS[method]);
+  } else if (BAYER_MATRICES[method]) {
+    out = runOrderedDither(working, width, height, alphaThreshold, BAYER_MATRICES[method]);
+  } else {
+    throw new Error(`Unknown dither method: ${method}. Valid: ${DITHER_METHODS.join(', ')}.`);
   }
-  throw new Error(`Unknown dither method: ${method}. Valid: ${DITHER_METHODS.join(', ')}.`);
+
+  // Post-pass: mark near-white pixels as skip, using the (possibly synthesized) working buffer.
+  if (skipWhite) {
+    const count = width * height;
+    for (let i = 0; i < count; i++) {
+      if (out[i] < 0) continue;
+      const o = i * 4;
+      if (working[o] >= whiteThreshold && working[o + 1] >= whiteThreshold && working[o + 2] >= whiteThreshold) {
+        out[i] = -1;
+      }
+    }
+  }
+  return out;
 }
 
 function quantizeNearest(rgba, width, height, alphaThreshold) {

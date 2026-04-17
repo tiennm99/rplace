@@ -35,6 +35,9 @@ const { values, positionals } = parseArgs({
     contrast: { type: 'string', default: '0' },
     saturation: { type: 'string', default: '0' },
     gamma: { type: 'string', default: '1' },
+    'skip-white': { type: 'boolean', default: false },
+    'white-threshold': { type: 'string', default: '230' },
+    'paint-transparent': { type: 'boolean', default: false },
   },
   allowPositionals: true,
 });
@@ -100,7 +103,13 @@ const working = hasCorrection
 
 // sharp raw buffer has channels=4 after ensureAlpha; same layout as Canvas ImageData.
 const ditherMethod = values['dither-method'] ?? (values.dither ? 'floyd' : 'none');
-const indices = rgbaToPalette(working, outW, outH, { alphaThreshold, method: ditherMethod });
+const indices = rgbaToPalette(working, outW, outH, {
+  alphaThreshold,
+  method: ditherMethod,
+  skipWhite: values['skip-white'],
+  whiteThreshold: parseInt(values['white-threshold'], 10),
+  paintTransparent: values['paint-transparent'],
+});
 const pixels = Array.from(indices);
 const opaque = pixels.reduce((n, p) => n + (p >= 0 ? 1 : 0), 0);
 

@@ -2,7 +2,7 @@
 
 ## Overview
 - **Priority:** P3 (low, easy win)
-- **Status:** Todo
+- **Status:** Done
 - Two cheap toggles: treat near-white pixels as transparent (useful for logos on white backgrounds), and optionally paint pixels with alpha < threshold as white instead of skipping.
 
 ## Requirements
@@ -40,10 +40,10 @@ Logic:
 5. Tests: near-white pixel → -1 iff skipWhite on; low-alpha pixel → -1 iff paintTransparent off.
 
 ## Todo
-- [ ] Extend `rgbaToPalette` options
-- [ ] UI toggles + threshold
-- [ ] CLI flags
-- [ ] Tests
+- [x] Extend `rgbaToPalette` options (`skipWhite`, `whiteThreshold`, `paintTransparent`)
+- [x] UI toggles + threshold slider
+- [x] CLI `--skip-white`, `--white-threshold`, `--paint-transparent`
+- [x] Tests (4 new cases in image-to-palette.test.js)
 
 ## Success Criteria
 - With defaults, output matches pre-change output.

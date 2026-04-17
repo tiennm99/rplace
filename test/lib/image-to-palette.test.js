@@ -82,6 +82,46 @@ describe('rgbaToPalette', () => {
   });
 });
 
+describe('rgbaToPalette skip-white / paint-transparent', () => {
+  it('skipWhite marks near-white source pixels as -1', () => {
+    const src = new Uint8ClampedArray([
+      255, 255, 255, 255, // white
+      240, 240, 240, 255, // near-white (>= default threshold 230)
+      100,   0,   0, 255, // red-ish
+    ]);
+    const idx = rgbaToPalette(src, 3, 1, { skipWhite: true });
+    expect(idx[0]).toBe(-1);
+    expect(idx[1]).toBe(-1);
+    expect(idx[2]).not.toBe(-1);
+  });
+
+  it('skipWhite respects a custom whiteThreshold', () => {
+    const src = new Uint8ClampedArray([
+      240, 240, 240, 255, // under custom threshold
+      255, 255, 255, 255, // above
+    ]);
+    const idx = rgbaToPalette(src, 2, 1, { skipWhite: true, whiteThreshold: 250 });
+    expect(idx[0]).not.toBe(-1);
+    expect(idx[1]).toBe(-1);
+  });
+
+  it('paintTransparent maps transparent pixels to palette white (31)', () => {
+    const src = new Uint8ClampedArray([
+      100, 100, 100, 10,  // transparent
+      255, 255, 255, 255, // white
+    ]);
+    const idx = rgbaToPalette(src, 2, 1, { paintTransparent: true });
+    expect(idx[0]).toBe(31); // ffffff
+    expect(idx[1]).toBe(31);
+  });
+
+  it('paintTransparent + skipWhite: transparent pixels end up skipped', () => {
+    const src = new Uint8ClampedArray([100, 100, 100, 10]);
+    const idx = rgbaToPalette(src, 1, 1, { paintTransparent: true, skipWhite: true });
+    expect(idx[0]).toBe(-1);
+  });
+});
+
 describe('nearestColorIndex', () => {
   it('exact palette match returns that index', () => {
     // Palette 0 is #6d001a → (0x6d, 0x00, 0x1a)
