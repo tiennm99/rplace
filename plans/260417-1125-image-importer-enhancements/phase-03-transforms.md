@@ -2,7 +2,7 @@
 
 ## Overview
 - **Priority:** P2 (medium)
-- **Status:** Todo
+- **Status:** Done
 - Let the user flip horizontally, flip vertically, and rotate in 90° increments without re-exporting the source.
 
 ## Requirements
@@ -33,10 +33,10 @@ srcRgba → transformRgba → resizeRgba → rgbaToPalette
 4. CLI flags + doc update.
 
 ## Todo
-- [ ] `image-transform.js` + tests
-- [ ] Importer buttons + state
-- [ ] CLI flags
-- [ ] Verify preview, overlay (Phase 2), and upload agree
+- [x] `image-transform.js` + tests (8 tests)
+- [x] Importer buttons + state (flip-H, flip-V, rotate CW/CCW, reset; auto-swaps resize dims on 90°)
+- [x] CLI flags (`--flip-h`, `--flip-v`, `--rotate`)
+- [x] Verified preview, overlay, and upload agree on transforms
 
 ## Success Criteria
 - Flip/rotate buttons produce visually correct preview.

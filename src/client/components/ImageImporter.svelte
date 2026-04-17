@@ -2,6 +2,7 @@
   import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
   import { rgbaToPalette, paletteToRgba } from '../../lib/image-to-palette.js';
   import { resizeRgba } from '../../lib/image-resize.js';
+  import { transformRgba } from '../../lib/image-transform.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
 
   let { open, cursorPos, getCommittedColor, setOverlay, onClose, onCredits } = $props();
@@ -34,6 +35,11 @@
   // On-canvas overlay preview
   let showOverlay = $state(true);
   let overlayAlpha = $state(0.6);
+
+  // Transforms
+  let flipH = $state(false);
+  let flipV = $state(false);
+  let rotation = $state(0); // 0 | 90 | 180 | 270
 
   // Run state
   let status = $state('idle'); // 'idle' | 'running' | 'paused' | 'done' | 'error'
@@ -79,15 +85,19 @@
     }
   }
 
-  // Re-run pipeline when source / resize / dither / method changes.
+  // Re-run pipeline when any relevant input changes.
+  // Order: transform → resize → palette.
   $effect(() => {
     if (!srcRgba || resizeW <= 0 || resizeH <= 0) {
       paletteIndices = null; opaqueCount = 0; return;
     }
-    const working = (resizeW === srcWidth && resizeH === srcHeight)
-      ? srcRgba
-      : resizeRgba(srcRgba, srcWidth, srcHeight, resizeW, resizeH, resampleMethod);
-    const idx = rgbaToPalette(working, resizeW, resizeH, { dither });
+    const transformed = (flipH || flipV || rotation !== 0)
+      ? transformRgba(srcRgba, srcWidth, srcHeight, { flipH, flipV, rotation })
+      : { rgba: srcRgba, width: srcWidth, height: srcHeight };
+    const resized = (resizeW === transformed.width && resizeH === transformed.height)
+      ? transformed.rgba
+      : resizeRgba(transformed.rgba, transformed.width, transformed.height, resizeW, resizeH, resampleMethod);
+    const idx = rgbaToPalette(resized, resizeW, resizeH, { dither });
     paletteIndices = idx;
     let count = 0;
     for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
@@ -129,8 +139,25 @@
     resizeH = Math.max(1, Math.floor(srcHeight * ratio));
   }
   function resetSize() {
-    resizeW = srcWidth;
-    resizeH = srcHeight;
+    // Reset to post-transform source dims so resize stays consistent with the preview.
+    const swap = rotation === 90 || rotation === 270;
+    resizeW = swap ? srcHeight : srcWidth;
+    resizeH = swap ? srcWidth : srcHeight;
+  }
+
+  function rotateBy(deltaCW) {
+    rotation = ((rotation + deltaCW) % 360 + 360) % 360;
+    // Swap resize dims so the output aspect tracks the rotation.
+    const tmp = resizeW; resizeW = resizeH; resizeH = tmp;
+  }
+  function resetTransforms() {
+    flipH = false;
+    flipV = false;
+    if (rotation !== 0) {
+      const swap = rotation === 90 || rotation === 270;
+      if (swap) { const tmp = resizeW; resizeW = resizeH; resizeH = tmp; }
+      rotation = 0;
+    }
   }
 
   $effect(() => { if (open && paletteIndices) renderPreview(); });
@@ -282,7 +309,17 @@
           </select>
         </label>
         <button onclick={fitToCanvas} title="Fit within canvas at current origin">Fit</button>
-        <button onclick={resetSize} title="Reset to source dimensions">1:1</button>
+        <button onclick={resetSize} title="Reset to post-transform source dimensions">1:1</button>
+      </div>
+
+      <div class="row">
+        <span class="lbl">transform</span>
+        <button onclick={() => flipH = !flipH} class:active={flipH} title="Flip horizontally">⇆</button>
+        <button onclick={() => flipV = !flipV} class:active={flipV} title="Flip vertically">⇅</button>
+        <button onclick={() => rotateBy(-90)} title="Rotate 90° counter-clockwise">⟲</button>
+        <button onclick={() => rotateBy(90)} title="Rotate 90° clockwise">⟳</button>
+        <span class="rot-label">{rotation}°</span>
+        <button onclick={resetTransforms} title="Reset transforms" disabled={!flipH && !flipV && rotation === 0}>reset</button>
       </div>
 
       <div class="row">
@@ -376,6 +413,17 @@
   input[type="number"] { width: 70px; padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }
   select { padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }
   .chk { font-size: 0.8rem; color: #aaa; cursor: pointer; }
+  .lbl { font-size: 0.8rem; color: #888; min-width: 56px; }
+  .rot-label { font-size: 0.8rem; color: #aaa; min-width: 32px; text-align: center; }
+
+  .row button {
+    padding: 4px 10px; background: #262626; color: #ddd;
+    border: 1px solid #444; border-radius: 4px; cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .row button:hover:not(:disabled) { background: #333; }
+  .row button:disabled { opacity: 0.35; cursor: default; }
+  .row button.active { background: #2d4d78; border-color: #3b6ba8; color: #fff; }
 
   .file-btn {
     display: inline-block; padding: 6px 12px; background: #2563eb; border-radius: 6px;

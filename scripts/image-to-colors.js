@@ -15,6 +15,7 @@ import sharp from 'sharp';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../src/lib/constants.js';
 import { rgbaToPalette } from '../src/lib/image-to-palette.js';
 import { resizeRgba } from '../src/lib/image-resize.js';
+import { transformRgba } from '../src/lib/image-transform.js';
 
 const { values, positionals } = parseArgs({
   args: process.argv.slice(2),
@@ -25,12 +26,15 @@ const { values, positionals } = parseArgs({
     width: { type: 'string' },
     height: { type: 'string' },
     method: { type: 'string', default: 'nearest' }, // nearest | bilinear | box
+    'flip-h': { type: 'boolean', default: false },
+    'flip-v': { type: 'boolean', default: false },
+    rotate: { type: 'string', default: '0' }, // 0 | 90 | 180 | 270 (CW)
   },
   allowPositionals: true,
 });
 
 if (positionals.length < 1) {
-  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither] [--width N] [--height N] [--method nearest|bilinear|box]');
+  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither] [--width N] [--height N] [--method nearest|bilinear|box] [--flip-h] [--flip-v] [--rotate 0|90|180|270]');
   process.exit(1);
 }
 
@@ -48,9 +52,21 @@ const { data, info } = await sharp(input)
   .raw()
   .toBuffer({ resolveWithObject: true });
 
-const { width: srcW, height: srcH } = info;
+const { width: rawW, height: rawH } = info;
 
-// Optional resize — defaults to source dims. Aspect-preserve when only one of W/H given.
+const rotation = parseInt(values.rotate, 10);
+if (![0, 90, 180, 270].includes(rotation)) {
+  console.error('--rotate must be 0, 90, 180, or 270');
+  process.exit(1);
+}
+
+const transformed = (values['flip-h'] || values['flip-v'] || rotation !== 0)
+  ? transformRgba(data, rawW, rawH, { flipH: values['flip-h'], flipV: values['flip-v'], rotation })
+  : { rgba: data, width: rawW, height: rawH };
+const srcW = transformed.width;
+const srcH = transformed.height;
+
+// Optional resize — defaults to post-transform dims. Aspect-preserve when only one of W/H given.
 const reqW = values.width ? parseInt(values.width, 10) : null;
 const reqH = values.height ? parseInt(values.height, 10) : null;
 let outW = reqW ?? (reqH ? Math.round(srcW * reqH / srcH) : srcW);
@@ -64,8 +80,8 @@ if (outW > CANVAS_WIDTH || outH > CANVAS_HEIGHT) {
 }
 
 const working = (outW === srcW && outH === srcH)
-  ? data
-  : resizeRgba(data, srcW, srcH, outW, outH, values.method);
+  ? transformed.rgba
+  : resizeRgba(transformed.rgba, srcW, srcH, outW, outH, values.method);
 
 // sharp raw buffer has channels=4 after ensureAlpha; same layout as Canvas ImageData.
 const indices = rgbaToPalette(working, outW, outH, { alphaThreshold, dither: values.dither });
@@ -73,5 +89,8 @@ const pixels = Array.from(indices);
 const opaque = pixels.reduce((n, p) => n + (p >= 0 ? 1 : 0), 0);
 
 await writeFile(output, JSON.stringify({ width: outW, height: outH, pixels }));
+const transformNote = (values['flip-h'] || values['flip-v'] || rotation !== 0)
+  ? ` [transform: ${[values['flip-h'] && 'flipH', values['flip-v'] && 'flipV', rotation !== 0 && `rot${rotation}`].filter(Boolean).join('+')}]`
+  : '';
 const resizeNote = (outW !== srcW || outH !== srcH) ? ` (resized from ${srcW}x${srcH} via ${values.method})` : '';
-console.log(`Wrote ${output}: ${outW}x${outH}${resizeNote}, ${opaque}/${pixels.length} opaque pixels${values.dither ? ' [dithered]' : ''}`);
+console.log(`Wrote ${output}: ${outW}x${outH}${resizeNote}${transformNote}, ${opaque}/${pixels.length} opaque pixels${values.dither ? ' [dithered]' : ''}`);
