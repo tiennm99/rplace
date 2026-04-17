@@ -2,7 +2,7 @@
 
 ## Overview
 - **Priority:** P1 (high UX value)
-- **Status:** Todo
+- **Status:** Done
 - Show a semi-transparent ghost of the palette-converted image on the main canvas at `(originX, originY)`, so the user can zoom/pan and confirm alignment *before* spending credits.
 
 ## Key Insights
@@ -42,10 +42,10 @@ Extend `CanvasRenderer` with:
 6. Clear overlay on panel close and when upload finishes successfully (optional; keep if user wants to re-align).
 
 ## Todo
-- [ ] `CanvasRenderer.setOverlay` + render integration
-- [ ] Importer toggle + alpha slider
-- [ ] Reactive wiring (importer ↔ renderer)
-- [ ] Verify overlay clears on close / unmount
+- [x] `CanvasRenderer.setOverlay` + render integration
+- [x] Importer toggle + alpha slider
+- [x] Reactive wiring (importer ↔ renderer, via App `setOverlay` prop)
+- [x] Overlay clears on close / unmount / toggle-off
 
 ## Success Criteria
 - Toggle overlay on → preview appears on the canvas at the chosen position at 50% alpha.

@@ -188,6 +188,7 @@
     open={importerOpen}
     {cursorPos}
     getCommittedColor={(x, y) => canvasRenderer?.getCommittedColor(x, y) ?? -1}
+    setOverlay={(o) => canvasRenderer?.setOverlay(o)}
     onClose={() => importerOpen = false}
     onCredits={(c) => credits = c}
   />

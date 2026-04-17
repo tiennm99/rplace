@@ -4,7 +4,7 @@
   import { resizeRgba } from '../../lib/image-resize.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
 
-  let { open, cursorPos, getCommittedColor, onClose, onCredits } = $props();
+  let { open, cursorPos, getCommittedColor, setOverlay, onClose, onCredits } = $props();
 
   // Source image (decoded, palette-mapped)
   let fileName = $state(null);
@@ -30,6 +30,10 @@
   let resizeH = $state(0);
   let lockAspect = $state(true);
   let resampleMethod = $state('nearest'); // 'nearest' | 'bilinear' | 'box'
+
+  // On-canvas overlay preview
+  let showOverlay = $state(true);
+  let overlayAlpha = $state(0.6);
 
   // Run state
   let status = $state('idle'); // 'idle' | 'running' | 'paused' | 'done' | 'error'
@@ -130,6 +134,24 @@
   }
 
   $effect(() => { if (open && paletteIndices) renderPreview(); });
+
+  // Push overlay state to the canvas renderer whenever its inputs change.
+  // Clears on close, missing image, or toggle off.
+  $effect(() => {
+    if (!setOverlay) return;
+    if (open && showOverlay && paletteIndices && resizeW > 0 && resizeH > 0) {
+      setOverlay({
+        x: originX, y: originY,
+        width: resizeW, height: resizeH,
+        indices: paletteIndices,
+        alpha: overlayAlpha,
+      });
+    } else {
+      setOverlay(null);
+    }
+    // On unmount, clear.
+    return () => setOverlay?.(null);
+  });
 
   function useCursor() {
     originX = cursorPos?.x ?? 0;
@@ -267,6 +289,18 @@
         <label>X <input type="number" min="0" max={CANVAS_WIDTH - 1} bind:value={originX} /></label>
         <label>Y <input type="number" min="0" max={CANVAS_HEIGHT - 1} bind:value={originY} /></label>
         <button onclick={useCursor} title="Set X/Y to current cursor position">Use cursor</button>
+      </div>
+
+      <div class="row">
+        <label class="checkbox" title="Show the palette-matched image on the main canvas at the target position.">
+          <input type="checkbox" bind:checked={showOverlay} />
+          Overlay
+        </label>
+        <label class="row" style="flex: 1; gap: 6px;">
+          <span style="font-size: 0.8rem; color: #aaa;">opacity</span>
+          <input type="range" min="0.1" max="1" step="0.05" bind:value={overlayAlpha} disabled={!showOverlay} />
+          <span style="font-size: 0.8rem; color: #aaa; width: 28px;">{Math.round(overlayAlpha * 100)}%</span>
+        </label>
       </div>
 
       <label class="row checkbox">

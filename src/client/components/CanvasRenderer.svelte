@@ -3,6 +3,7 @@
   import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA, MAX_BATCH_SIZE } from '../../lib/constants.js';
   import { decodeCanvas, indicesToRgba } from '../../lib/canvas-decoder.js';
   import { createPixelBuffer } from '../../lib/pixel-buffer.js';
+  import { paletteToRgba } from '../../lib/image-to-palette.js';
 
   let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull } = $props();
 
@@ -25,6 +26,10 @@
   const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
   const offCtx = offscreen.getContext('2d');
 
+  /** Overlay state: image-importer preview rendered on top of committed+pending.
+   *  { x, y, canvas: OffscreenCanvas, alpha } or null. */
+  let overlayState = null;
+
   // Touch state
   let lastTouchDist = 0;
   let touchStartTime = 0;
@@ -43,6 +48,11 @@
     ctx.translate(pan.x, pan.y);
     ctx.scale(effZoom, effZoom);
     ctx.drawImage(offscreen, 0, 0);
+    if (overlayState) {
+      ctx.globalAlpha = overlayState.alpha;
+      ctx.drawImage(overlayState.canvas, overlayState.x, overlayState.y);
+      ctx.globalAlpha = 1;
+    }
   }
 
   function screenToCanvas(clientX, clientY) {
@@ -156,6 +166,23 @@
   export function getCommittedColor(x, y) {
     if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return -1;
     return committedColors[y * CANVAS_WIDTH + x];
+  }
+
+  /** Set or clear the preview overlay drawn on top of the canvas.
+   *  @param {{x: number, y: number, width: number, height: number, indices: Int16Array|number[], alpha?: number}|null} overlay */
+  export function setOverlay(overlay) {
+    if (!overlay || !overlay.indices || overlay.width <= 0 || overlay.height <= 0) {
+      overlayState = null;
+      render();
+      return;
+    }
+    const { x, y, width, height, indices, alpha = 0.6 } = overlay;
+    const rgba = paletteToRgba(indices, width, height);
+    const oc = new OffscreenCanvas(width, height);
+    const octx = oc.getContext('2d');
+    octx.putImageData(new ImageData(rgba, width, height), 0, 0);
+    overlayState = { x, y, canvas: oc, alpha };
+    render();
   }
 
   export function commitPending() {

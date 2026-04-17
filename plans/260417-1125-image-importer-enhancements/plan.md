@@ -16,7 +16,7 @@ Grow the in-app Image Import panel into a full pre-placement pipeline: resize, t
 | # | Phase | Status | Value |
 |---|---|---|---|
 | 1 | [Resize controls](phase-01-resize-controls.md) | Done | Must-have — user explicitly asked |
-| 2 | [Overlay preview on canvas](phase-02-overlay-preview.md) | Todo | High — visualize alignment before spending credits |
+| 2 | [Overlay preview on canvas](phase-02-overlay-preview.md) | Done | High — visualize alignment before spending credits |
 | 3 | [Transforms (flip / rotate)](phase-03-transforms.md) | Todo | Medium — quick fixes without re-editing source |
 | 4 | [More dithering algorithms](phase-04-dithering-algorithms.md) | Todo | Medium — different looks per source |
 | 5 | [Color correction sliders](phase-05-color-correction.md) | Todo | Medium — photos benefit most |
