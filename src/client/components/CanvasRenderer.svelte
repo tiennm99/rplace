@@ -153,6 +153,11 @@
 
   export function getPendingPixels() { return buffer.getAllPixels(); }
 
+  export function getCommittedColor(x, y) {
+    if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) return -1;
+    return committedColors[y * CANVAS_WIDTH + x];
+  }
+
   export function commitPending() {
     for (const { x, y, color } of buffer.getAllPixels()) {
       committedColors[y * CANVAS_WIDTH + x] = color;

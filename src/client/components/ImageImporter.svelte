@@ -1,0 +1,318 @@
+<script>
+  import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
+  import { rgbaToPalette, paletteToRgba } from '../../lib/image-to-palette.js';
+  import { createImageUploader } from '../../lib/image-uploader.js';
+
+  let { open, cursorPos, getCommittedColor, onClose, onCredits } = $props();
+
+  // Source image (decoded, palette-mapped)
+  let fileName = $state(null);
+  let srcWidth = $state(0);
+  let srcHeight = $state(0);
+  /** @type {Uint8ClampedArray|null} */
+  let srcRgba = $state(null);
+  /** @type {Int16Array|null} */
+  let paletteIndices = $state(null);
+  let opaqueCount = $state(0);
+
+  // Preview canvas
+  let previewEl = $state();
+
+  // Target position + options
+  let originX = $state(0);
+  let originY = $state(0);
+  let skipMatching = $state(true);
+  let dither = $state(false);
+
+  // Run state
+  let status = $state('idle'); // 'idle' | 'running' | 'paused' | 'done' | 'error'
+  let placed = $state(0);
+  let total = $state(0);
+  let statusText = $state('');
+  let errorText = $state(null);
+  /** @type {ReturnType<typeof createImageUploader>|null} */
+  let uploader = null;
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    fileName = file.name;
+    errorText = null;
+
+    try {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await img.decode();
+      URL.revokeObjectURL(img.src);
+
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      if (w === 0 || h === 0) throw new Error('Empty image');
+
+      const oc = new OffscreenCanvas(w, h);
+      const octx = oc.getContext('2d');
+      octx.drawImage(img, 0, 0);
+      const { data } = octx.getImageData(0, 0, w, h);
+
+      srcRgba = data;
+      srcWidth = w;
+      srcHeight = h;
+      // paletteIndices recomputed reactively via $effect below.
+    } catch (err) {
+      errorText = `Failed to load image: ${err.message || err}`;
+      srcRgba = null;
+      paletteIndices = null;
+      srcWidth = srcHeight = 0;
+    }
+  }
+
+  // Re-quantize when source or dither mode changes.
+  $effect(() => {
+    if (!srcRgba) { paletteIndices = null; opaqueCount = 0; return; }
+    const idx = rgbaToPalette(srcRgba, srcWidth, srcHeight, { dither });
+    paletteIndices = idx;
+    let count = 0;
+    for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
+    opaqueCount = count;
+    renderPreview();
+  });
+
+  function renderPreview() {
+    if (!previewEl || !paletteIndices) return;
+    const rgba = paletteToRgba(paletteIndices, srcWidth, srcHeight);
+    previewEl.width = srcWidth;
+    previewEl.height = srcHeight;
+    const ctx = previewEl.getContext('2d');
+    ctx.putImageData(new ImageData(rgba, srcWidth, srcHeight), 0, 0);
+  }
+
+  $effect(() => { if (open && paletteIndices) renderPreview(); });
+
+  function useCursor() {
+    originX = cursorPos?.x ?? 0;
+    originY = cursorPos?.y ?? 0;
+  }
+
+  function validatePlacement() {
+    if (!paletteIndices) return 'No image loaded.';
+    if (!Number.isInteger(originX) || !Number.isInteger(originY)) return 'X and Y must be integers.';
+    if (originX < 0 || originY < 0) return 'X and Y must be ≥ 0.';
+    if (originX + srcWidth > CANVAS_WIDTH || originY + srcHeight > CANVAS_HEIGHT) {
+      return `Image would overflow canvas (${CANVAS_WIDTH}x${CANVAS_HEIGHT}).`;
+    }
+    return null;
+  }
+
+  function buildPixels() {
+    const pixels = [];
+    for (let i = 0; i < paletteIndices.length; i++) {
+      const color = paletteIndices[i];
+      if (color < 0) continue;
+      const lx = i % srcWidth;
+      const ly = (i / srcWidth) | 0;
+      const x = originX + lx;
+      const y = originY + ly;
+      if (skipMatching && getCommittedColor?.(x, y) === color) continue;
+      pixels.push({ x, y, color });
+    }
+    return pixels;
+  }
+
+  async function start() {
+    const err = validatePlacement();
+    if (err) { errorText = err; return; }
+    errorText = null;
+
+    const pixels = buildPixels();
+    if (pixels.length === 0) {
+      statusText = 'Nothing to place (all pixels already match).';
+      status = 'done';
+      placed = 0; total = 0;
+      return;
+    }
+
+    total = pixels.length;
+    placed = 0;
+    status = 'running';
+    statusText = 'Starting…';
+
+    uploader = createImageUploader({
+      onProgress: (p) => { placed = p; },
+      onCredits: (c) => onCredits?.(c),
+      onStatus: (s) => { statusText = s; },
+      onError: (e) => { errorText = e.message || String(e); },
+    });
+
+    const result = await uploader.run(pixels);
+    uploader = null;
+    placed = result.placed;
+
+    if (result.error) {
+      status = 'error';
+      statusText = `Stopped: ${result.error.message}`;
+    } else if (result.aborted) {
+      status = 'idle';
+      statusText = `Cancelled after ${result.placed}/${result.total}.`;
+    } else {
+      status = 'done';
+      statusText = `Done. Placed ${result.placed} pixels.`;
+    }
+  }
+
+  function pause() { uploader?.pause(); status = 'paused'; statusText = 'Paused.'; }
+  function resume() { uploader?.resume(); status = 'running'; statusText = 'Resuming…'; }
+  function cancel() { uploader?.abort(); }
+
+  function reset() {
+    if (status === 'running' || status === 'paused') return;
+    placed = 0; total = 0; status = 'idle'; statusText = ''; errorText = null;
+  }
+
+  const pct = $derived(total > 0 ? (placed / total) * 100 : 0);
+  const etaSec = $derived(
+    status === 'running' && total > placed
+      ? Math.ceil((total - placed)) // ~1 pixel/sec steady state
+      : null,
+  );
+</script>
+
+{#if open}
+  <div class="panel" role="dialog" aria-label="Image importer">
+    <div class="head">
+      <strong>Import Image</strong>
+      <button class="x" onclick={onClose} aria-label="Close">✕</button>
+    </div>
+
+    <div class="row">
+      <label class="file-btn">
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onchange={handleFile} />
+        {fileName ? 'Change image…' : 'Choose image…'}
+      </label>
+      {#if fileName}<span class="file-name" title={fileName}>{fileName}</span>{/if}
+    </div>
+
+    {#if paletteIndices}
+      <div class="preview-row">
+        <div class="preview-wrap">
+          <canvas bind:this={previewEl} class="preview"></canvas>
+        </div>
+        <div class="meta">
+          <div>{srcWidth} × {srcHeight}</div>
+          <div>{opaqueCount} / {srcWidth * srcHeight} opaque</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>X <input type="number" min="0" max={CANVAS_WIDTH - 1} bind:value={originX} /></label>
+        <label>Y <input type="number" min="0" max={CANVAS_HEIGHT - 1} bind:value={originY} /></label>
+        <button onclick={useCursor} title="Set X/Y to current cursor position">Use cursor</button>
+      </div>
+
+      <label class="row checkbox">
+        <input type="checkbox" bind:checked={skipMatching} />
+        Skip pixels that already match
+      </label>
+      <label class="row checkbox" title="Floyd-Steinberg error diffusion. Better for photos & gradients; noisier for flat art.">
+        <input type="checkbox" bind:checked={dither} />
+        Dither (Floyd-Steinberg)
+      </label>
+
+      {#if total > 0}
+        <div class="progress">
+          <div class="bar"><div class="fill" style="width: {pct}%"></div></div>
+          <div class="prog-text">
+            {placed} / {total} ({pct.toFixed(1)}%){etaSec != null ? ` — ~${etaSec}s left` : ''}
+          </div>
+        </div>
+      {/if}
+
+      {#if statusText}<div class="status">{statusText}</div>{/if}
+      {#if errorText}<div class="error">{errorText}</div>{/if}
+
+      <div class="controls">
+        {#if status === 'idle' || status === 'done' || status === 'error'}
+          <button class="primary" onclick={start} disabled={!paletteIndices}>Start</button>
+          {#if status !== 'idle'}<button onclick={reset}>Reset</button>{/if}
+        {:else if status === 'running'}
+          <button onclick={pause}>Pause</button>
+          <button class="danger" onclick={cancel}>Cancel</button>
+        {:else if status === 'paused'}
+          <button class="primary" onclick={resume}>Resume</button>
+          <button class="danger" onclick={cancel}>Cancel</button>
+        {/if}
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .panel {
+    position: fixed;
+    top: 64px;
+    right: 12px;
+    width: 320px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    background: rgba(10, 10, 10, 0.95);
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 12px;
+    color: #ddd;
+    font-size: 0.9rem;
+    z-index: 20;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .head { display: flex; justify-content: space-between; align-items: center; }
+  .x {
+    background: transparent; border: 0; color: #aaa; font-size: 1.2rem;
+    cursor: pointer; padding: 4px 8px;
+  }
+  .x:hover { color: #fff; }
+
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row.checkbox { gap: 6px; cursor: pointer; }
+
+  label { display: flex; align-items: center; gap: 6px; }
+  input[type="number"] { width: 70px; padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }
+
+  .file-btn {
+    display: inline-block; padding: 6px 12px; background: #2563eb; border-radius: 6px;
+    cursor: pointer; color: #fff; font-weight: 500;
+  }
+  .file-btn:hover { background: #1d4ed8; }
+  .file-btn input { display: none; }
+  .file-name { color: #aaa; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; max-width: 180px; white-space: nowrap; }
+
+  .preview-row { display: flex; gap: 10px; align-items: flex-start; }
+  .preview-wrap {
+    width: 120px; height: 120px; background: #0a0a0a; border: 1px solid #333;
+    border-radius: 6px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .preview { image-rendering: pixelated; max-width: 100%; max-height: 100%; }
+  .meta { font-size: 0.8rem; color: #aaa; display: flex; flex-direction: column; gap: 4px; }
+
+  .progress { display: flex; flex-direction: column; gap: 4px; }
+  .bar { height: 8px; background: #222; border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; background: #2563eb; transition: width 0.2s; }
+  .prog-text { font-size: 0.8rem; color: #bbb; }
+
+  .status { font-size: 0.85rem; color: #9cf; }
+  .error { font-size: 0.85rem; color: #f88; background: rgba(139, 34, 34, 0.3); padding: 6px 8px; border-radius: 4px; }
+
+  .controls { display: flex; gap: 6px; flex-wrap: wrap; }
+  .controls button {
+    padding: 6px 14px; background: #333; color: #ddd;
+    border: 1px solid #555; border-radius: 6px; cursor: pointer;
+  }
+  .controls button:hover { background: #444; }
+  .controls button.primary { background: #2563eb; border-color: #3b82f6; color: #fff; }
+  .controls button.primary:hover { background: #1d4ed8; }
+  .controls button.danger { background: #8b2222; border-color: #a33; color: #fff; }
+  .controls button.danger:hover { background: #a33; }
+  .controls button:disabled { opacity: 0.4; cursor: default; }
+</style>

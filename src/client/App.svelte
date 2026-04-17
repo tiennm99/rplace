@@ -5,6 +5,7 @@
   import CanvasControls from './components/CanvasControls.svelte';
   import DrawToolbar from './components/DrawToolbar.svelte';
   import UserInfo from './components/UserInfo.svelte';
+  import ImageImporter from './components/ImageImporter.svelte';
 
   let selectedColor = $state(27); // black
   let credits = $state(MAX_CREDITS);
@@ -15,6 +16,7 @@
   let bufferState = $state({ canUndo: false, canRedo: false, pixelCount: 0 });
   let toast = $state(null); // { kind: 'error'|'info', text: string }
   let toastTimer = null;
+  let importerOpen = $state(false);
 
   /** @type {CanvasRenderer} */
   let canvasRenderer;
@@ -177,6 +179,19 @@
   <ColorPicker {selectedColor} onSelect={(i) => selectedColor = i} />
   <UserInfo {credits} />
 
+  <button class="import-btn" onclick={() => importerOpen = !importerOpen}
+    title="Upload an image and place it on the canvas">
+    {importerOpen ? 'Close Import' : 'Import Image'}
+  </button>
+
+  <ImageImporter
+    open={importerOpen}
+    {cursorPos}
+    getCommittedColor={(x, y) => canvasRenderer?.getCommittedColor(x, y) ?? -1}
+    onClose={() => importerOpen = false}
+    onCredits={(c) => credits = c}
+  />
+
   {#if toast}
     <div class="toast {toast.kind}" role="status" aria-live="polite">{toast.text}</div>
   {/if}
@@ -203,4 +218,21 @@
   }
   .toast.error { background: #8b2222; color: #fff; border: 1px solid #a33; }
   .toast.info { background: #1d3a8a; color: #fff; border: 1px solid #3b5cb8; }
+
+  .import-btn {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    padding: 8px 14px;
+    background: rgba(37, 99, 235, 0.9);
+    border: 1px solid #3b82f6;
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border-radius: 8px;
+    cursor: pointer;
+    z-index: 25;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  .import-btn:hover { background: #1d4ed8; }
 </style>
