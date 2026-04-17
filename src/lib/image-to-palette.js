@@ -1,4 +1,7 @@
 import { COLORS_RGBA } from './constants.js';
+import { ERROR_DIFFUSION_KERNELS, BAYER_MATRICES, DITHER_METHODS } from './dither-kernels.js';
+
+export { DITHER_METHODS };
 
 /**
  * Return the palette index closest to (r, g, b) in squared-RGB distance.
@@ -25,19 +28,30 @@ export function nearestColorIndex(r, g, b) {
 /**
  * Convert an RGBA pixel buffer into a flat array of palette indices.
  * Pixels with alpha < threshold become -1 (caller should skip on upload).
+ *
+ * Back-compat: `dither: true` is treated as `method: 'floyd'`.
+ *
  * @param {Uint8Array|Uint8ClampedArray|number[]} rgba - length = width*height*4
  * @param {number} width
  * @param {number} height
  * @param {Object} [options]
  * @param {number} [options.alphaThreshold=128]
- * @param {boolean} [options.dither=false] - Floyd-Steinberg error diffusion
+ * @param {boolean} [options.dither=false] - legacy; prefer `method`
+ * @param {('none'|'floyd'|'atkinson'|'jarvis'|'burkes'|'sierra'|'sierra-lite'|'bayer-2'|'bayer-4'|'bayer-8')} [options.method]
  * @returns {Int16Array} length = width*height
  */
 export function rgbaToPalette(rgba, width, height, options = {}) {
   const { alphaThreshold = 128, dither = false } = options;
-  return dither
-    ? ditherFloydSteinberg(rgba, width, height, alphaThreshold)
-    : quantizeNearest(rgba, width, height, alphaThreshold);
+  const method = options.method ?? (dither ? 'floyd' : 'none');
+
+  if (method === 'none') return quantizeNearest(rgba, width, height, alphaThreshold);
+  if (ERROR_DIFFUSION_KERNELS[method]) {
+    return runErrorDiffusion(rgba, width, height, alphaThreshold, ERROR_DIFFUSION_KERNELS[method]);
+  }
+  if (BAYER_MATRICES[method]) {
+    return runOrderedDither(rgba, width, height, alphaThreshold, BAYER_MATRICES[method]);
+  }
+  throw new Error(`Unknown dither method: ${method}. Valid: ${DITHER_METHODS.join(', ')}.`);
 }
 
 function quantizeNearest(rgba, width, height, alphaThreshold) {
@@ -51,13 +65,14 @@ function quantizeNearest(rgba, width, height, alphaThreshold) {
   return out;
 }
 
-function ditherFloydSteinberg(rgba, width, height, alphaThreshold) {
+/** Generic error-diffusion runner. Kernel rows only diffuse forward (dy > 0 or
+ *  dy === 0 && dx > 0) so the working buffer can be a single-pass float image. */
+function runErrorDiffusion(rgba, width, height, alphaThreshold, kernel) {
   const count = width * height;
   const out = new Int16Array(count);
-  // Working RGB buffer in float so we can accumulate error without clamping early.
   const buf = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) {
-    buf[i * 3] = rgba[i * 4];
+    buf[i * 3]     = rgba[i * 4];
     buf[i * 3 + 1] = rgba[i * 4 + 1];
     buf[i * 3 + 2] = rgba[i * 4 + 2];
   }
@@ -67,9 +82,7 @@ function ditherFloydSteinberg(rgba, width, height, alphaThreshold) {
       const i = y * width + x;
       if (rgba[i * 4 + 3] < alphaThreshold) { out[i] = -1; continue; }
 
-      const r = buf[i * 3];
-      const g = buf[i * 3 + 1];
-      const b = buf[i * 3 + 2];
+      const r = buf[i * 3], g = buf[i * 3 + 1], b = buf[i * 3 + 2];
       const idx = nearestColorIndex(
         r < 0 ? 0 : r > 255 ? 255 : r,
         g < 0 ? 0 : g > 255 ? 255 : g,
@@ -79,22 +92,48 @@ function ditherFloydSteinberg(rgba, width, height, alphaThreshold) {
       const [pr, pg, pb] = COLORS_RGBA[idx];
       const er = r - pr, eg = g - pg, eb = b - pb;
 
-      diffuse(buf, rgba, width, height, x + 1, y,     er, eg, eb, 7 / 16, alphaThreshold);
-      diffuse(buf, rgba, width, height, x - 1, y + 1, er, eg, eb, 3 / 16, alphaThreshold);
-      diffuse(buf, rgba, width, height, x,     y + 1, er, eg, eb, 5 / 16, alphaThreshold);
-      diffuse(buf, rgba, width, height, x + 1, y + 1, er, eg, eb, 1 / 16, alphaThreshold);
+      for (const [dx, dy, w] of kernel) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const ni = ny * width + nx;
+        if (rgba[ni * 4 + 3] < alphaThreshold) continue; // skip transparent neighbors
+        buf[ni * 3]     += er * w;
+        buf[ni * 3 + 1] += eg * w;
+        buf[ni * 3 + 2] += eb * w;
+      }
     }
   }
   return out;
 }
 
-function diffuse(buf, rgba, width, height, nx, ny, er, eg, eb, w, alphaThreshold) {
-  if (nx < 0 || nx >= width || ny < 0 || ny >= height) return;
-  const ni = ny * width + nx;
-  if (rgba[ni * 4 + 3] < alphaThreshold) return; // skip transparent neighbors
-  buf[ni * 3]     += er * w;
-  buf[ni * 3 + 1] += eg * w;
-  buf[ni * 3 + 2] += eb * w;
+/** Ordered dither — bias each pixel by a threshold-matrix shift before
+ *  nearest-color lookup. No error propagation; cheap and stateless. */
+function runOrderedDither(rgba, width, height, alphaThreshold, matrix) {
+  const mh = matrix.length;
+  const mw = matrix[0].length;
+  // Shift in RGB units: roughly the distance between neighboring palette
+  // colors. The grey ramp in our palette spans ~50 units per step so 48
+  // keeps the pattern visible without over-banding.
+  const SPREAD = 48;
+  const count = width * height;
+  const out = new Int16Array(count);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (rgba[i * 4 + 3] < alphaThreshold) { out[i] = -1; continue; }
+      const bias = (matrix[y % mh][x % mw] - 0.5) * SPREAD;
+      const r = rgba[i * 4] + bias;
+      const g = rgba[i * 4 + 1] + bias;
+      const b = rgba[i * 4 + 2] + bias;
+      out[i] = nearestColorIndex(
+        r < 0 ? 0 : r > 255 ? 255 : r,
+        g < 0 ? 0 : g > 255 ? 255 : g,
+        b < 0 ? 0 : b > 255 ? 255 : b,
+      );
+    }
+  }
+  return out;
 }
 
 /**

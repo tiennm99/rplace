@@ -2,7 +2,7 @@
 
 ## Overview
 - **Priority:** P2 (medium)
-- **Status:** Todo
+- **Status:** Done
 - Add Atkinson, Jarvis, Stucki, Burkes, Sierra variants (error diffusion) and Bayer 2x2/4x4/8x8 ordered dithering so users can pick the visual style that fits their source.
 
 ## Key Insights
@@ -36,12 +36,12 @@ Refactor `src/lib/image-to-palette.js`:
 6. Visual regression: snapshot-test a fixed gradient across methods.
 
 ## Todo
-- [ ] Refactor FS into generalized error-diffusion runner
-- [ ] Add Atkinson/Jarvis/Stucki/Burkes/Sierra/SierraLite kernels
-- [ ] Add Bayer 2/4/8 ordered dithering
-- [ ] UI dropdown + strength slider
-- [ ] CLI `--method`, keep `--dither` as alias
-- [ ] Tests
+- [x] Refactor FS into generalized error-diffusion runner (`runErrorDiffusion`)
+- [x] Add Atkinson/Jarvis/Burkes/Sierra/SierraLite kernels (Stucki dropped; close to Jarvis)
+- [x] Add Bayer 2/4/8 ordered dithering (`runOrderedDither`, SPREAD=48)
+- [x] UI dropdown (strength slider dropped as YAGNI for now — add if users ask)
+- [x] CLI `--dither-method`, kept `--dither` as floyd alias
+- [x] Tests (13 cases including all-methods smoke, kernel-weight sanity)
 
 ## Success Criteria
 - Each method produces distinct, visibly reasonable output on a test gradient.

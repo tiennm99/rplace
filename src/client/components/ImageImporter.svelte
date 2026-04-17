@@ -1,6 +1,6 @@
 <script>
   import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
-  import { rgbaToPalette, paletteToRgba } from '../../lib/image-to-palette.js';
+  import { rgbaToPalette, paletteToRgba, DITHER_METHODS } from '../../lib/image-to-palette.js';
   import { resizeRgba } from '../../lib/image-resize.js';
   import { transformRgba } from '../../lib/image-transform.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
@@ -24,7 +24,7 @@
   let originX = $state(0);
   let originY = $state(0);
   let skipMatching = $state(true);
-  let dither = $state(false);
+  let ditherMethod = $state('none'); // see DITHER_METHODS
 
   // Resize controls — init to source dims on file load
   let resizeW = $state(0);
@@ -97,7 +97,7 @@
     const resized = (resizeW === transformed.width && resizeH === transformed.height)
       ? transformed.rgba
       : resizeRgba(transformed.rgba, transformed.width, transformed.height, resizeW, resizeH, resampleMethod);
-    const idx = rgbaToPalette(resized, resizeW, resizeH, { dither });
+    const idx = rgbaToPalette(resized, resizeW, resizeH, { method: ditherMethod });
     paletteIndices = idx;
     let count = 0;
     for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
@@ -344,10 +344,15 @@
         <input type="checkbox" bind:checked={skipMatching} />
         Skip pixels that already match
       </label>
-      <label class="row checkbox" title="Floyd-Steinberg error diffusion. Better for photos & gradients; noisier for flat art.">
-        <input type="checkbox" bind:checked={dither} />
-        Dither (Floyd-Steinberg)
-      </label>
+      <div class="row">
+        <label>Dither
+          <select bind:value={ditherMethod} title="error-diffusion (floyd/atkinson/…) or ordered (bayer-*)">
+            {#each DITHER_METHODS as m}
+              <option value={m}>{m}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
 
       {#if total > 0}
         <div class="progress">

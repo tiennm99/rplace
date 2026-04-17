@@ -23,6 +23,7 @@ const { values, positionals } = parseArgs({
     output: { type: 'string', short: 'o' },
     'alpha-threshold': { type: 'string', default: '128' },
     dither: { type: 'boolean', default: false },
+    'dither-method': { type: 'string' }, // see DITHER_METHODS; overrides --dither
     width: { type: 'string' },
     height: { type: 'string' },
     method: { type: 'string', default: 'nearest' }, // nearest | bilinear | box
@@ -34,7 +35,7 @@ const { values, positionals } = parseArgs({
 });
 
 if (positionals.length < 1) {
-  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither] [--width N] [--height N] [--method nearest|bilinear|box] [--flip-h] [--flip-v] [--rotate 0|90|180|270]');
+  console.error('Usage: node scripts/image-to-colors.js <input> [-o output.json] [--alpha-threshold 128] [--dither|--dither-method <name>] [--width N] [--height N] [--method nearest|bilinear|box] [--flip-h] [--flip-v] [--rotate 0|90|180|270]');
   process.exit(1);
 }
 
@@ -84,7 +85,8 @@ const working = (outW === srcW && outH === srcH)
   : resizeRgba(transformed.rgba, srcW, srcH, outW, outH, values.method);
 
 // sharp raw buffer has channels=4 after ensureAlpha; same layout as Canvas ImageData.
-const indices = rgbaToPalette(working, outW, outH, { alphaThreshold, dither: values.dither });
+const ditherMethod = values['dither-method'] ?? (values.dither ? 'floyd' : 'none');
+const indices = rgbaToPalette(working, outW, outH, { alphaThreshold, method: ditherMethod });
 const pixels = Array.from(indices);
 const opaque = pixels.reduce((n, p) => n + (p >= 0 ? 1 : 0), 0);
 
@@ -93,4 +95,5 @@ const transformNote = (values['flip-h'] || values['flip-v'] || rotation !== 0)
   ? ` [transform: ${[values['flip-h'] && 'flipH', values['flip-v'] && 'flipV', rotation !== 0 && `rot${rotation}`].filter(Boolean).join('+')}]`
   : '';
 const resizeNote = (outW !== srcW || outH !== srcH) ? ` (resized from ${srcW}x${srcH} via ${values.method})` : '';
-console.log(`Wrote ${output}: ${outW}x${outH}${resizeNote}${transformNote}, ${opaque}/${pixels.length} opaque pixels${values.dither ? ' [dithered]' : ''}`);
+const ditherNote = ditherMethod !== 'none' ? ` [dither: ${ditherMethod}]` : '';
+console.log(`Wrote ${output}: ${outW}x${outH}${resizeNote}${transformNote}, ${opaque}/${pixels.length} opaque pixels${ditherNote}`);
