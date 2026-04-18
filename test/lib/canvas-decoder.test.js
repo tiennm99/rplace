@@ -1,30 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { decodeCanvas, indicesToRgba } from '../../src/lib/canvas-decoder.js';
-import { CANVAS_WIDTH, CANVAS_HEIGHT, BITS_PER_PIXEL, COLORS, COLORS_RGBA } from '../../src/lib/constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS, COLORS_RGBA, MAX_COLORS } from '../../src/lib/constants.js';
 
 const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
-const EXPECTED_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
-
-/** Encode color indices into 5-bit packed bytes (test helper, mirrors BITFIELD storage).
- * Returns a full-canvas-sized buffer (zero-padded tail) so decodeCanvas accepts it. */
-function encodeIndicesPadded(indices) {
-  const bytes = new Uint8Array(EXPECTED_BYTES);
-  for (let i = 0; i < indices.length; i++) {
-    const bitPos = i * 5;
-    const byteIndex = bitPos >> 3;
-    const bitOffset = bitPos & 7;
-    bytes[byteIndex] |= (indices[i] << (11 - bitOffset)) >> 8;
-    if (bitOffset > 3) {
-      bytes[byteIndex + 1] |= (indices[i] << (11 - bitOffset)) & 0xff;
-    } else {
-      bytes[byteIndex] |= (indices[i] << (3 - bitOffset));
-    }
-  }
-  return bytes;
-}
+const EXPECTED_BYTES = TOTAL_PIXELS; // 1 byte per pixel
 
 describe('decodeCanvas', () => {
-  it('decodes a full zero-filled buffer as all zeros', () => {
+  it('accepts a full zero-filled buffer', () => {
     const buffer = new ArrayBuffer(EXPECTED_BYTES);
     const indices = decodeCanvas(buffer);
     expect(indices.length).toBe(TOTAL_PIXELS);
@@ -36,64 +18,51 @@ describe('decodeCanvas', () => {
     expect(() => decodeCanvas(new ArrayBuffer(EXPECTED_BYTES - 1))).toThrow(/truncated/);
   });
 
-  it('decodes a single pixel', () => {
-    // Color 15 at pixel 0: binary 01111 in first 5 bits → byte 0 = 0111_1000 = 0x78
+  it('returns bytes as-is when lengths match (identity decode)', () => {
     const bytes = new Uint8Array(EXPECTED_BYTES);
-    bytes[0] = 0x78;
-    const indices = decodeCanvas(bytes.buffer);
-    expect(indices[0]).toBe(15);
+    bytes[0] = 200; bytes[1] = 42; bytes[EXPECTED_BYTES - 1] = 99;
+    const decoded = decodeCanvas(bytes);
+    expect(decoded[0]).toBe(200);
+    expect(decoded[1]).toBe(42);
+    expect(decoded[EXPECTED_BYTES - 1]).toBe(99);
   });
 
-  it('round-trips all 32 color values', () => {
-    const input = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) input[i] = i;
-    const encoded = encodeIndicesPadded(input);
-    const decoded = decodeCanvas(encoded.buffer);
-    for (let i = 0; i < 32; i++) {
-      expect(decoded[i]).toBe(i);
-    }
+  it('handles all 256 color values', () => {
+    const bytes = new Uint8Array(EXPECTED_BYTES);
+    for (let i = 0; i < 256; i++) bytes[i] = i;
+    const decoded = decodeCanvas(bytes);
+    for (let i = 0; i < 256; i++) expect(decoded[i]).toBe(i);
   });
 
-  it('round-trips repeated color patterns', () => {
-    const input = new Uint8Array(100);
-    for (let i = 0; i < 100; i++) input[i] = i % 32;
-    const encoded = encodeIndicesPadded(input);
-    const decoded = decodeCanvas(encoded.buffer);
-    for (let i = 0; i < 100; i++) {
-      expect(decoded[i]).toBe(i % 32);
-    }
-  });
-
-  it('handles max color value (31) at various offsets', () => {
-    const input = new Uint8Array(8).fill(31);
-    const encoded = encodeIndicesPadded(input);
-    const decoded = decodeCanvas(encoded.buffer);
-    for (let i = 0; i < 8; i++) {
-      expect(decoded[i]).toBe(31);
-    }
+  it('slices when given a larger buffer', () => {
+    const bytes = new Uint8Array(EXPECTED_BYTES + 10);
+    bytes[EXPECTED_BYTES - 1] = 7;
+    const decoded = decodeCanvas(bytes);
+    expect(decoded.length).toBe(EXPECTED_BYTES);
+    expect(decoded[EXPECTED_BYTES - 1]).toBe(7);
   });
 });
 
 describe('indicesToRgba', () => {
-  it('produces correct RGBA for all 32 colors', () => {
-    const indices = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) indices[i] = i;
+  it('produces correct RGBA across a sampling of palette indices', () => {
+    const samples = [0, 1, 15, 16, 50, 120, 200, 255];
+    const indices = new Uint8Array(samples);
     const rgba = indicesToRgba(indices);
 
-    expect(rgba.length).toBe(32 * 4);
-    for (let i = 0; i < 32; i++) {
-      const [r, g, b, a] = COLORS_RGBA[i];
+    expect(rgba.length).toBe(samples.length * 4);
+    samples.forEach((paletteIdx, i) => {
+      const [r, g, b, a] = COLORS_RGBA[paletteIdx];
       expect(rgba[i * 4]).toBe(r);
       expect(rgba[i * 4 + 1]).toBe(g);
       expect(rgba[i * 4 + 2]).toBe(b);
       expect(rgba[i * 4 + 3]).toBe(a);
-    }
+    });
   });
 
   it('always sets alpha to 255', () => {
-    const indices = new Uint8Array([0, 15, 27, 31]);
+    const indices = new Uint8Array([0, 15, 100, 255]);
     const rgba = indicesToRgba(indices);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < indices.length; i++) {
       expect(rgba[i * 4 + 3]).toBe(255);
     }
   });
@@ -104,12 +73,14 @@ describe('indicesToRgba', () => {
   });
 });
 
-describe('COLORS_RGBA consistency', () => {
-  it('has 32 entries matching COLORS hex values', () => {
-    expect(COLORS_RGBA.length).toBe(32);
-    expect(COLORS.length).toBe(32);
+describe('COLORS / COLORS_RGBA consistency', () => {
+  it('has MAX_COLORS (256) entries', () => {
+    expect(COLORS.length).toBe(MAX_COLORS);
+    expect(COLORS_RGBA.length).toBe(MAX_COLORS);
+  });
 
-    for (let i = 0; i < 32; i++) {
+  it('each hex string maps to its RGBA tuple', () => {
+    for (let i = 0; i < COLORS.length; i++) {
       const hex = COLORS[i];
       const n = parseInt(hex.slice(1), 16);
       expect(COLORS_RGBA[i][0]).toBe((n >> 16) & 0xff);
@@ -117,5 +88,16 @@ describe('COLORS_RGBA consistency', () => {
       expect(COLORS_RGBA[i][2]).toBe(n & 0xff);
       expect(COLORS_RGBA[i][3]).toBe(255);
     }
+  });
+
+  it('indices 0..15 form a monotonic grayscale ramp (black → white)', () => {
+    for (let i = 0; i < 16; i++) {
+      const [r, g, b] = COLORS_RGBA[i];
+      expect(r).toBe(g);
+      expect(g).toBe(b);
+      if (i > 0) expect(r).toBeGreaterThan(COLORS_RGBA[i - 1][0]);
+    }
+    expect(COLORS_RGBA[0]).toEqual([0, 0, 0, 255]);
+    expect(COLORS_RGBA[15]).toEqual([255, 255, 255, 255]);
   });
 });

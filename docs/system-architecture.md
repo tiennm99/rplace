@@ -23,9 +23,9 @@ rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker. T
 
 ```
 1. Client fetches GET /api/canvas
-2. Worker reads Redis key via GETRANGE → raw binary
-3. Client receives ~2.5MB (5-bit packed pixels)
-4. Client decodes 5-bit values → color indices → RGBA ImageData
+2. Worker reads Redis key via GETRANGE → raw binary (16 MB, gzip-compressed by CF edge)
+3. Client receives 16 MB of bytes — each byte is a palette index (u8, byte-aligned)
+4. Client maps indices → RGBA ImageData via COLORS_RGBA lookup
 5. Renders onto HTML5 Canvas with OffscreenCanvas
 ```
 
@@ -42,13 +42,14 @@ rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker. T
 
 ## Storage
 
-### Redis BITFIELD (Canvas)
+### Redis STRING / BITFIELD (Canvas)
 
-- Key: `canvas`
-- Encoding: 5 bits per pixel (u5), 32 colors
-- Size: `2048 * 2048 * 5 / 8 = 2,621,440 bytes` (~2.5MB)
+- Key: `rplace:canvas:v2` (bumped from the old `rplace:canvas` so the 32-color/2048² data is ignored on rollout)
+- Encoding: 8 bits per pixel (u8), 256-color palette — byte-aligned, so raw Redis bytes are the pixel indices directly
+- Size: `4096 × 4096 × 1 = 16,777,216 bytes` (16 MB)
 - Offset: `y * CANVAS_WIDTH + x`
-- Atomic batch writes: single BITFIELD command with chained .set() calls
+- Atomic batch writes: single BITFIELD command chaining `SET u8 #offset color` per pixel
+- Reads via GETRANGE return the whole buffer; Cloudflare edge handles gzip
 
 ### Redis STRING (Cooldown)
 

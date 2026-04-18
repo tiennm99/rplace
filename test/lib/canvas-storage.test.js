@@ -10,7 +10,7 @@ vi.mock('../../src/lib/redis-client.js', () => ({
 import { getFullCanvas, setPixels } from '../../src/lib/canvas-storage.js';
 import { redisRaw, redisRawBinary } from '../../src/lib/redis-client.js';
 
-const CANVAS_BYTES = Math.ceil((CANVAS_WIDTH * CANVAS_WIDTH * 5) / 8);
+const CANVAS_BYTES = CANVAS_WIDTH * CANVAS_WIDTH; // u8 = 1 byte per pixel
 
 describe('setPixels', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -28,9 +28,9 @@ describe('setPixels', () => {
     expect(call[0]).toBe('BITFIELD');
     expect(call[1]).toBe(REDIS_CANVAS_KEY);
     expect(call[2]).toBe('SET');
-    expect(call[3]).toBe('u5');
-    // offset = 20 * 2048 + 10 = 40970
-    expect(call[4]).toBe('#40970');
+    expect(call[3]).toBe('u8');
+    const expectedOffset = 20 * CANVAS_WIDTH + 10;
+    expect(call[4]).toBe(`#${expectedOffset}`);
     expect(call[5]).toBe('5');
   });
 
@@ -38,24 +38,26 @@ describe('setPixels', () => {
     redisRaw.mockResolvedValue({ result: [0, 0] });
     await setPixels({}, [
       { x: 0, y: 0, color: 1 },
-      { x: 1, y: 0, color: 31 },
+      { x: 1, y: 0, color: 255 },
     ]);
 
     const call = redisRaw.mock.calls[0][1];
-    // BITFIELD key SET u5 #0 1 SET u5 #1 31
+    // BITFIELD key SET u8 #0 1 SET u8 #1 255
     expect(call).toEqual([
       'BITFIELD', REDIS_CANVAS_KEY,
-      'SET', 'u5', '#0', '1',
-      'SET', 'u5', '#1', '31',
+      'SET', 'u8', '#0', '1',
+      'SET', 'u8', '#1', '255',
     ]);
   });
 
   it('computes offset correctly for various positions', async () => {
     redisRaw.mockResolvedValue({ result: [0] });
 
-    // Pixel at (2047, 2047) — last pixel
-    await setPixels({}, [{ x: 2047, y: 2047, color: 0 }]);
-    const offset = 2047 * CANVAS_WIDTH + 2047;
+    // Last pixel of the canvas.
+    const lastX = CANVAS_WIDTH - 1;
+    const lastY = CANVAS_WIDTH - 1;
+    await setPixels({}, [{ x: lastX, y: lastY, color: 0 }]);
+    const offset = lastY * CANVAS_WIDTH + lastX;
     expect(redisRaw.mock.calls[0][1][4]).toBe(`#${offset}`);
   });
 });

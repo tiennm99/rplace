@@ -1,31 +1,29 @@
-import { CANVAS_WIDTH, CANVAS_HEIGHT, BITS_PER_PIXEL, COLORS_RGBA } from './constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA } from './constants.js';
 
 const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
-const EXPECTED_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
+const EXPECTED_BYTES = TOTAL_PIXELS; // 1 byte per pixel (8-bit palette index)
 
 /**
- * Decode 5-bit packed canvas buffer into an array of color indices.
- * Throws if buffer is shorter than the canvas size — silent zero-padding masks corruption.
- * @param {ArrayBuffer} buffer - raw canvas bytes
- * @returns {Uint8Array} color index per pixel
+ * "Decode" a raw canvas buffer into color indices. With 8 bits per pixel the
+ * bytes are already indices — we wrap/copy them into a Uint8Array of the
+ * expected length. We throw on short buffers rather than silently zero-padding,
+ * which previously masked corruption on the ingest path.
+ * @param {ArrayBuffer|ArrayBufferView} buffer - raw canvas bytes
+ * @returns {Uint8Array} one color index per pixel
  */
 export function decodeCanvas(buffer) {
-  if (buffer.byteLength < EXPECTED_BYTES) {
-    throw new Error(`Canvas buffer truncated: got ${buffer.byteLength} bytes, expected ${EXPECTED_BYTES}`);
+  const byteLength = buffer.byteLength;
+  if (byteLength < EXPECTED_BYTES) {
+    throw new Error(`Canvas buffer truncated: got ${byteLength} bytes, expected ${EXPECTED_BYTES}`);
   }
-  const bytes = new Uint8Array(buffer);
-  const indices = new Uint8Array(TOTAL_PIXELS);
-
-  let bitPos = 0;
-  for (let i = 0; i < TOTAL_PIXELS; i++) {
-    const byteIndex = bitPos >> 3;
-    const bitOffset = bitPos & 7;
-    const value = ((bytes[byteIndex] << 8 | bytes[byteIndex + 1]) >> (11 - bitOffset)) & 0x1f;
-    indices[i] = value;
-    bitPos += 5;
+  if (buffer instanceof Uint8Array) {
+    return buffer.byteLength === EXPECTED_BYTES ? buffer : buffer.subarray(0, EXPECTED_BYTES);
   }
-
-  return indices;
+  return new Uint8Array(
+    buffer instanceof ArrayBuffer ? buffer : buffer.buffer,
+    buffer instanceof ArrayBuffer ? 0 : buffer.byteOffset,
+    EXPECTED_BYTES,
+  );
 }
 
 /**

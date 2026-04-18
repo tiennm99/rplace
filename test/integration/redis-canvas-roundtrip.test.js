@@ -7,10 +7,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { GenericContainer } from 'testcontainers';
 import Redis from 'ioredis';
 import { decodeCanvas } from '../../src/lib/canvas-decoder.js';
-import { CANVAS_WIDTH, BITS_PER_PIXEL, REDIS_CANVAS_KEY } from '../../src/lib/constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, REDIS_CANVAS_KEY } from '../../src/lib/constants.js';
 
-const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_WIDTH;
-const CANVAS_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
+const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
+const CANVAS_BYTES = TOTAL_PIXELS; // 1 byte per pixel (u8)
 
 let container;
 let redis;
@@ -37,7 +37,7 @@ async function writePixels(pixels) {
   const args = [];
   for (const { x, y, color } of pixels) {
     const offset = y * CANVAS_WIDTH + x;
-    args.push('SET', 'u5', `#${offset}`, String(color));
+    args.push('SET', 'u8', `#${offset}`, String(color));
   }
   return redis.call('BITFIELD', REDIS_CANVAS_KEY, ...args);
 }
@@ -71,16 +71,16 @@ describe('Redis BITFIELD canvas round-trip', () => {
     expect(indices[0]).toBe(15);
   });
 
-  it('round-trips all 32 color values', async () => {
+  it('round-trips 256 color values across the palette', async () => {
     const pixels = [];
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < 256; i++) {
       pixels.push({ x: i, y: 1, color: i });
     }
     await writePixels(pixels);
     const bytes = await readCanvasBytes();
     const indices = decodeCanvas(bytes.buffer);
 
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < 256; i++) {
       expect(indices[1 * CANVAS_WIDTH + i]).toBe(i);
     }
   });
@@ -88,10 +88,10 @@ describe('Redis BITFIELD canvas round-trip', () => {
   it('handles pixels at various canvas positions', async () => {
     const testCases = [
       { x: 0, y: 0, color: 1 },
-      { x: 2047, y: 0, color: 31 },
-      { x: 0, y: 2047, color: 16 },
-      { x: 2047, y: 2047, color: 8 },
-      { x: 1024, y: 1024, color: 20 },
+      { x: CANVAS_WIDTH - 1, y: 0, color: 255 },
+      { x: 0, y: CANVAS_HEIGHT - 1, color: 128 },
+      { x: CANVAS_WIDTH - 1, y: CANVAS_HEIGHT - 1, color: 42 },
+      { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2, color: 200 },
     ];
     await writePixels(testCases);
     const bytes = await readCanvasBytes();
@@ -108,48 +108,38 @@ describe('Redis BITFIELD canvas round-trip', () => {
     let indices = decodeCanvas(bytes.buffer);
     expect(indices[500 * CANVAS_WIDTH + 500]).toBe(10);
 
-    // Overwrite
-    await writePixels([{ x: 500, y: 500, color: 25 }]);
+    await writePixels([{ x: 500, y: 500, color: 250 }]);
     bytes = await readCanvasBytes();
     indices = decodeCanvas(bytes.buffer);
-    expect(indices[500 * CANVAS_WIDTH + 500]).toBe(25);
+    expect(indices[500 * CANVAS_WIDTH + 500]).toBe(250);
   });
 
   it('batch writes are atomic (all pixels in one BITFIELD)', async () => {
-    const batchSize = 100;
+    const batchSize = 500;
     const pixels = [];
     for (let i = 0; i < batchSize; i++) {
-      pixels.push({ x: i, y: 2, color: i % 32 });
+      pixels.push({ x: i, y: 2, color: i % 256 });
     }
     await writePixels(pixels);
     const bytes = await readCanvasBytes();
     const indices = decodeCanvas(bytes.buffer);
 
     for (let i = 0; i < batchSize; i++) {
-      expect(indices[2 * CANVAS_WIDTH + i]).toBe(i % 32);
+      expect(indices[2 * CANVAS_WIDTH + i]).toBe(i % 256);
     }
   });
 
-  it('adjacent pixels do not corrupt each other (5-bit boundary)', async () => {
-    // 5-bit values pack across byte boundaries; verify no bleed
+  it('adjacent pixels do not corrupt each other (byte boundary)', async () => {
+    // With u8 each pixel is its own byte; verify no bleed between neighbors.
     const pixels = [];
-    for (let i = 0; i < 16; i++) {
-      pixels.push({ x: i, y: 3, color: 31 }); // all bits set
-    }
-    // Interleave with zeros
-    for (let i = 16; i < 32; i++) {
-      pixels.push({ x: i, y: 3, color: 0 });
-    }
+    for (let i = 0; i < 16; i++) pixels.push({ x: i, y: 3, color: 255 }); // all bits
+    for (let i = 16; i < 32; i++) pixels.push({ x: i, y: 3, color: 0 });   // zero
     await writePixels(pixels);
     const bytes = await readCanvasBytes();
     const indices = decodeCanvas(bytes.buffer);
 
-    for (let i = 0; i < 16; i++) {
-      expect(indices[3 * CANVAS_WIDTH + i]).toBe(31);
-    }
-    for (let i = 16; i < 32; i++) {
-      expect(indices[3 * CANVAS_WIDTH + i]).toBe(0);
-    }
+    for (let i = 0; i < 16; i++) expect(indices[3 * CANVAS_WIDTH + i]).toBe(255);
+    for (let i = 16; i < 32; i++) expect(indices[3 * CANVAS_WIDTH + i]).toBe(0);
   });
 });
 
