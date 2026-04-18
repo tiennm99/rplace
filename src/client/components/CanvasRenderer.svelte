@@ -6,7 +6,7 @@
   import { paletteToRgba } from '../../lib/image-to-palette.js';
 
   let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull,
-        pickActive = false, onPick, onEyedrop } = $props();
+        pickActive = false, onPick, onEyedrop, minZoom = 0.25 } = $props();
 
   let canvasEl;
   let imageData = null;
@@ -36,15 +36,55 @@
   let touchStartTime = 0;
   let touchMoved = false;
 
+  // --- Render coalescing ---
+  // Any state change calls render(). Multiple calls within a frame collapse
+  // to one actual paint via requestAnimationFrame. imageDataDirty gates the
+  // expensive putImageData (16 MB copy): only re-upload when pixels changed.
+  let rafPending = false;
+  let imageDataDirty = true;
+  let pendingEffZoom = null;
+
   function render(effZoom = zoom) {
+    pendingEffZoom = effZoom;
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      const z = pendingEffZoom;
+      pendingEffZoom = null;
+      doRender(z);
+    });
+  }
+
+  function clampPan(effZoom = zoom) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const dispW = CANVAS_WIDTH * effZoom;
+    const dispH = CANVAS_HEIGHT * effZoom;
+    // If canvas >= viewport on an axis, pan range is [vw - dispW, 0] — canvas
+    // always covers viewport. If canvas < viewport, range is [0, vw - dispW] —
+    // canvas always stays inside (centered at midpoint).
+    const minX = Math.min(0, vw - dispW);
+    const maxX = Math.max(0, vw - dispW);
+    const minY = Math.min(0, vh - dispH);
+    const maxY = Math.max(0, vh - dispH);
+    pan.x = Math.max(minX, Math.min(maxX, pan.x));
+    pan.y = Math.max(minY, Math.min(maxY, pan.y));
+  }
+
+  function doRender(effZoom) {
     if (!canvasEl || !imageData) return;
+    clampPan(effZoom);
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvasEl.getContext('2d');
     ctx.imageSmoothingEnabled = false;
     ctx.setTransform(1, 0, 0, 1, 0, 0); // reset before clear
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-    offCtx.putImageData(imageData, 0, 0);
+    if (imageDataDirty) {
+      offCtx.putImageData(imageData, 0, 0);
+      imageDataDirty = false;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // CSS pixels → device pixels
     ctx.translate(pan.x, pan.y);
     ctx.scale(effZoom, effZoom);
@@ -71,6 +111,7 @@
     imageData.data[off + 1] = rgba[1];
     imageData.data[off + 2] = rgba[2];
     imageData.data[off + 3] = rgba[3];
+    imageDataDirty = true;
   }
 
   function notifyBuffer() {
@@ -302,7 +343,7 @@
   function handleWheel(e) {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 2 : 0.5;
-    const newZoom = Math.max(0.25, Math.min(64, zoom * factor));
+    const newZoom = Math.max(minZoom, Math.min(64, zoom * factor));
     pan.x = e.clientX - (e.clientX - pan.x) * (newZoom / zoom);
     pan.y = e.clientY - (e.clientY - pan.y) * (newZoom / zoom);
     if (newZoom !== zoom) onZoomChange(newZoom);
@@ -365,7 +406,7 @@
       const dist = getTouchDist(e.touches);
       const center = getTouchCenter(e.touches);
       const scale = dist / lastTouchDist;
-      const newZoom = Math.max(0.25, Math.min(64, zoom * scale));
+      const newZoom = Math.max(minZoom, Math.min(64, zoom * scale));
       pan.x = center.x - (center.x - pan.x) * (newZoom / zoom);
       pan.y = center.y - (center.y - pan.y) * (newZoom / zoom);
       pan.x += center.x - lastMouse.x;
@@ -418,6 +459,7 @@
       committedColors = new Uint8Array(indices); // replace pre-allocated zero array
       const rgba = indicesToRgba(indices);
       imageData = new ImageData(rgba, CANVAS_WIDTH, CANVAS_HEIGHT);
+      imageDataDirty = true;
       render();
     } catch (err) {
       console.error('Failed to load canvas:', err);

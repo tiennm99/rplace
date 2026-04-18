@@ -1,5 +1,5 @@
 <script>
-  import { MAX_BATCH_SIZE, REQUEST_COOLDOWN_SEC } from '../lib/constants.js';
+  import { MAX_BATCH_SIZE, REQUEST_COOLDOWN_SEC, CANVAS_WIDTH, CANVAS_HEIGHT } from '../lib/constants.js';
   import CanvasRenderer from './components/CanvasRenderer.svelte';
   import ColorPicker from './components/ColorPicker.svelte';
   import CanvasControls from './components/CanvasControls.svelte';
@@ -10,6 +10,25 @@
   let selectedColor = $state(0);
   let cursorPos = $state({ x: 0, y: 0 });
   let zoom = $state(1);
+
+  // Viewport-aware zoom bounds. minZoom = "canvas fits in viewport" — any
+  // further and the canvas would shrink past the screen, leaving empty
+  // void space. Recomputed on window resize.
+  let viewport = $state({
+    w: typeof window !== 'undefined' ? window.innerWidth : 1920,
+    h: typeof window !== 'undefined' ? window.innerHeight : 1080,
+  });
+  const MAX_ZOOM = 64;
+  const minZoom = $derived(Math.min(viewport.w / CANVAS_WIDTH, viewport.h / CANVAS_HEIGHT));
+  const clampZoom = (z) => Math.max(minZoom, Math.min(MAX_ZOOM, z));
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => { viewport = { w: window.innerWidth, h: window.innerHeight }; };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
+  // After viewport or zoom-bound changes, pull current zoom into range.
+  $effect(() => { const z = clampZoom(zoom); if (z !== zoom) zoom = z; });
   let mode = $state('paint');
   let submitting = $state(false);
   let bufferState = $state({ canUndo: false, canRedo: false, pixelCount: 0 });
@@ -150,11 +169,11 @@
         return;
       case 'q': case 'Q':
         e.preventDefault();
-        zoom = Math.min(zoom * 2, 64);
+        zoom = clampZoom(zoom * 2);
         return;
       case 'e': case 'E':
         e.preventDefault();
-        zoom = Math.max(zoom / 2, 0.25);
+        zoom = clampZoom(zoom / 2);
         return;
       case 'w': case 'W':
         e.preventDefault(); canvasRenderer?.panBy(0, PAN_STEP); return;
@@ -240,20 +259,22 @@
     bind:this={canvasRenderer}
     {selectedColor}
     {zoom}
+    {minZoom}
     {mode}
     pickActive={!!activePick}
     onPick={handleCanvasPick}
     onEyedrop={handleEyedrop}
-    onZoomChange={(z) => zoom = z}
+    onZoomChange={(z) => zoom = clampZoom(z)}
     onCursorMove={(pos) => cursorPos = pos}
     onBufferChange={(s) => bufferState = s}
     onBufferFull={handleBufferFull}
   />
   <CanvasControls
     {zoom}
-    onZoomIn={() => zoom = Math.min(zoom * 2, 64)}
-    onZoomOut={() => zoom = Math.max(zoom / 2, 0.25)}
-    onResetZoom={() => zoom = 1}
+    {minZoom}
+    onZoomIn={() => zoom = clampZoom(zoom * 2)}
+    onZoomOut={() => zoom = clampZoom(zoom / 2)}
+    onResetZoom={() => zoom = clampZoom(1)}
     onGoto={(x, y) => canvasRenderer?.gotoPoint(x, y)}
     {cursorPos}
     {wsState}

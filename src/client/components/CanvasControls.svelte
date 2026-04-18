@@ -1,8 +1,11 @@
 <script>
   import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
 
-  let { zoom, onZoomIn, onZoomOut, onResetZoom, onGoto, cursorPos,
+  let { zoom, minZoom = 0.25, onZoomIn, onZoomOut, onResetZoom, onGoto, cursorPos,
         wsState = 'connecting', onHelp } = $props();
+
+  const canZoomOut = $derived(zoom > minZoom + 1e-6);
+  const canZoomIn = $derived(zoom < 64 - 1e-6);
 
   const wsLabel = $derived({
     open: 'Live',
@@ -34,9 +37,10 @@
 <div class="controls">
   <span class="ws {wsState}" title={wsLabel} aria-label="Connection: {wsLabel}"></span>
   <div class="zoom">
-    <button onclick={onZoomOut} title="Zoom out (E)">−</button>
+    <button onclick={onZoomOut} disabled={!canZoomOut}
+      title={canZoomOut ? 'Zoom out (E)' : 'At min zoom — canvas fits the viewport'}>−</button>
     <span class="level">{zoomLabel}</span>
-    <button onclick={onZoomIn} title="Zoom in (Q)">+</button>
+    <button onclick={onZoomIn} disabled={!canZoomIn} title="Zoom in (Q)">+</button>
     <button onclick={onResetZoom} title="Reset zoom">⟲</button>
   </div>
   <div class="coords">({cursorPos.x}, {cursorPos.y})</div>
@@ -90,8 +94,12 @@
     justify-content: center;
   }
 
-  .zoom button:hover {
+  .zoom button:hover:not(:disabled) {
     background: #555;
+  }
+  .zoom button:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   .level {
