@@ -1,5 +1,5 @@
 <script>
-  import { MAX_BATCH_SIZE } from '../lib/constants.js';
+  import { MAX_BATCH_SIZE, REQUEST_COOLDOWN_SEC } from '../lib/constants.js';
   import CanvasRenderer from './components/CanvasRenderer.svelte';
   import ColorPicker from './components/ColorPicker.svelte';
   import CanvasControls from './components/CanvasControls.svelte';
@@ -16,6 +16,22 @@
   let toastTimer = null;
   let importerOpen = $state(false);
 
+  // Pick-target handoff — ImageImporter calls requestPick() to register handlers;
+  // a click on the canvas fires .pick(pos); Esc fires .cancel().
+  /** @type {{pick: (pos: {x: number, y: number}) => void, cancel: () => void}|null} */
+  let activePick = $state(null);
+
+  // Submit cooldown — blocks Submit + shows countdown. Driven by successful
+  // requests (forward-guess REQUEST_COOLDOWN_SEC) and 429 retryAfter responses.
+  let cooldownUntil = $state(0);
+  let nowTick = $state(Date.now());
+  $effect(() => {
+    if (cooldownUntil <= nowTick) return;
+    const id = setInterval(() => { nowTick = Date.now(); }, 100);
+    return () => clearInterval(id);
+  });
+  const cooldownMs = $derived(Math.max(0, cooldownUntil - nowTick));
+
   /** @type {CanvasRenderer} */
   let canvasRenderer;
 
@@ -23,6 +39,25 @@
     toast = { kind, text };
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toast = null; }, ttlMs);
+  }
+
+  function requestPick(handlers) {
+    // Replace any in-flight pick (cancel it first so its owner resets UI).
+    // handlers === null means "cancel current pick, no replacement".
+    if (activePick) activePick.cancel();
+    activePick = handlers ?? null;
+  }
+
+  function handleCanvasPick(pos) {
+    const p = activePick;
+    activePick = null;
+    p?.pick(pos);
+  }
+
+  function cancelActivePick() {
+    const p = activePick;
+    activePick = null;
+    p?.cancel();
   }
 
   // WebSocket connection with auto-reconnect + exponential backoff
@@ -65,15 +100,44 @@
   });
 
   // Keyboard shortcuts
+  const PAN_STEP = 40;
   function handleKeyDown(e) {
     // Don't intercept when user is typing in an input
     if (e.target?.matches?.('input, textarea, [contenteditable]')) return;
+
     if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
       canvasRenderer?.undo();
-    } else if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
+      return;
+    }
+    if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
       e.preventDefault();
       canvasRenderer?.redo();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    switch (e.key) {
+      case 'Escape':
+        if (activePick) { e.preventDefault(); cancelActivePick(); }
+        else canvasRenderer?.cancelStrokeIfAny?.();
+        return;
+      case 'q': case 'Q':
+        e.preventDefault();
+        zoom = Math.min(zoom * 2, 64);
+        return;
+      case 'e': case 'E':
+        e.preventDefault();
+        zoom = Math.max(zoom / 2, 0.25);
+        return;
+      case 'w': case 'W':
+        e.preventDefault(); canvasRenderer?.panBy(0, PAN_STEP); return;
+      case 's': case 'S':
+        e.preventDefault(); canvasRenderer?.panBy(0, -PAN_STEP); return;
+      case 'a': case 'A':
+        e.preventDefault(); canvasRenderer?.panBy(PAN_STEP, 0); return;
+      case 'd': case 'D':
+        e.preventDefault(); canvasRenderer?.panBy(-PAN_STEP, 0); return;
     }
   }
 
@@ -100,7 +164,9 @@
 
       if (!res.ok) {
         if (res.status === 429) {
-          const retryAfter = data?.retryAfter ?? '?';
+          const retryAfter = data?.retryAfter ?? REQUEST_COOLDOWN_SEC;
+          cooldownUntil = Date.now() + retryAfter * 1000;
+          nowTick = Date.now();
           showToast('error', `Rate limited — try again in ${retryAfter}s.`, 6000);
         } else if (res.status === 413) {
           showToast('error', 'Request too large. Reduce batch size.');
@@ -114,6 +180,8 @@
 
       if (data?.ok) {
         canvasRenderer.commitPending();
+        cooldownUntil = Date.now() + REQUEST_COOLDOWN_SEC * 1000;
+        nowTick = Date.now();
         showToast('info', 'Submitted', 1500);
       } else {
         showToast('error', `Unexpected response: ${data?.error || 'no data'}`);
@@ -138,6 +206,8 @@
     {selectedColor}
     {zoom}
     {mode}
+    pickActive={!!activePick}
+    onPick={handleCanvasPick}
     onZoomChange={(z) => zoom = z}
     onCursorMove={(pos) => cursorPos = pos}
     onBufferChange={(s) => bufferState = s}
@@ -148,6 +218,7 @@
     onZoomIn={() => zoom = Math.min(zoom * 2, 64)}
     onZoomOut={() => zoom = Math.max(zoom / 2, 0.25)}
     onResetZoom={() => zoom = 1}
+    onGoto={(x, y) => canvasRenderer?.gotoPoint(x, y)}
     {cursorPos}
   />
   <DrawToolbar
@@ -161,6 +232,7 @@
     canRedo={bufferState.canRedo}
     pixelCount={bufferState.pixelCount}
     {submitting}
+    {cooldownMs}
   />
   <ColorPicker {selectedColor} onSelect={(i) => selectedColor = i} />
 
@@ -173,11 +245,17 @@
 
   <ImageImporter
     open={importerOpen}
-    {cursorPos}
     getCommittedColor={(x, y) => canvasRenderer?.getCommittedColor(x, y) ?? -1}
     setOverlay={(o) => canvasRenderer?.setOverlay(o)}
+    onRequestPick={requestPick}
     onClose={() => importerOpen = false}
   />
+
+  {#if activePick}
+    <div class="pick-banner" role="status" aria-live="polite">
+      Click on the canvas to pick a position — Esc to cancel.
+    </div>
+  {/if}
 
   {#if toast}
     <div class="toast {toast.kind}" role="status" aria-live="polite">{toast.text}</div>
@@ -205,6 +283,21 @@
   }
   .toast.error { background: #8b2222; color: #fff; border: 1px solid #a33; }
   .toast.info { background: #1d3a8a; color: #fff; border: 1px solid #3b5cb8; }
+
+  .pick-banner {
+    position: fixed;
+    top: 64px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    background: rgba(37, 99, 235, 0.92);
+    color: #fff;
+    border: 1px solid #3b82f6;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    z-index: 25;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
 
   .import-btn {
     position: fixed;
