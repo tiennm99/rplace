@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { getFullCanvas, setPixels } from './lib/canvas-storage.js';
 import { getUserId } from './lib/get-user-id.js';
-import { checkAndDeductCredits } from './lib/rate-limiter.js';
+import { checkRateLimit } from './lib/rate-limiter.js';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from './lib/constants.js';
 
 export { CanvasRoom } from './durable-objects/canvas-room.js';
@@ -67,13 +67,11 @@ app.post('/api/place', async (c) => {
     }
   }
 
-  // Rate limiting
+  // Rate limiting — 1 request per second per user, regardless of batch size.
   const userId = await getUserId(c.req.raw);
-  const { allowed, remaining, retryAfter } = await checkAndDeductCredits(
-    c.env, userId, pixels.length,
-  );
+  const { allowed, retryAfter } = await checkRateLimit(c.env, userId);
   if (!allowed) {
-    return c.json({ error: 'rate_limited', remaining, retryAfter }, 429);
+    return c.json({ error: 'rate_limited', retryAfter }, 429);
   }
 
   // Persist pixels (must succeed before broadcast)
@@ -95,7 +93,7 @@ app.post('/api/place', async (c) => {
     broadcastTask.catch((err) => console.error('Broadcast:', err));
   }
 
-  return c.json({ ok: true, credits: remaining });
+  return c.json({ ok: true });
 });
 
 async function broadcastPixels(env, pixels) {

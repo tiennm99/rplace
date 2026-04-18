@@ -7,11 +7,9 @@ export const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
 export const BITS_PER_PIXEL = 5;
 export const MAX_COLORS = 32;
 
-/** Rate limiting — stackable credit system */
-export const CREDIT_REGEN_RATE = 1; // credits per second
-export const MAX_CREDITS = 256;
-// Batch cannot exceed credits cap — anything larger is guaranteed-rejected by rate-limit.
-export const MAX_BATCH_SIZE = MAX_CREDITS;
+/** Rate limiting — one request per second per user, batch size independent. */
+export const REQUEST_COOLDOWN_SEC = 1;
+export const MAX_BATCH_SIZE = 2048;
 
 /** Redis keys */
 export const REDIS_KEY_PREFIX = 'rplace:';

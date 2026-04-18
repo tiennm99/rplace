@@ -9,14 +9,14 @@ rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker. T
 ### Pixel Placement
 
 ```
-1. User clicks canvas → optimistic render + credit deduction
-2. POST /api/place { pixels: [{x, y, color}] }
-3. Worker validates input (bounds, types, batch size ≤ 32)
-4. Worker checks credits via Lua script (atomic check-and-deduct)
+1. User draws on canvas → optimistic render into a pending buffer
+2. User hits Submit → POST /api/place { pixels: [{x, y, color}] }
+3. Worker validates input (bounds, types, batch size ≤ 2048)
+4. Worker checks cooldown via SET NX EX (atomic per-user lock)
 5. Worker writes pixels via Redis BITFIELD (atomic batch)
 6. Worker sends pixels to Durable Object /broadcast
 7. Durable Object fans out to all WebSocket clients
-8. Response: { ok: true, credits: N }
+8. Response: { ok: true }
 ```
 
 ### Canvas Loading
@@ -50,32 +50,31 @@ rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker. T
 - Offset: `y * CANVAS_WIDTH + x`
 - Atomic batch writes: single BITFIELD command with chained .set() calls
 
-### Redis HASH (Credits)
+### Redis STRING (Cooldown)
 
-- Key pattern: `credits:{userId}`
-- Fields: `lu` (last update, unix seconds), `cr` (current credits)
-- TTL: 24 hours (auto-expire inactive users)
-- Accessed via Lua script for atomic check-and-deduct
+- Key pattern: `cooldown:{userId}`
+- Value: `"1"` (presence is the signal; content is irrelevant)
+- TTL: `REQUEST_COOLDOWN_SEC` (1s) — auto-expires, no explicit cleanup
+- Atomic via `SET key "1" NX EX 1`
 
 ## Rate Limiting
 
-Token bucket algorithm implemented as a Lua script:
+Fixed-window cooldown, one request per second per user:
 
 ```
 On placement request:
-1. Read stored credits + lastUpdate from HASH
-2. Calculate accrued = stored + floor(elapsed_seconds * regen_rate)
-3. Cap at MAX_CREDITS (256)
-4. If accrued < requested → reject (429)
-5. Else → deduct, update HASH, return remaining
+1. SET cooldown:{userId} "1" NX EX 1
+2. If reply == "OK" → allow (key set, TTL 1s)
+3. If reply == null → reject (429, retryAfter = 1)
 ```
 
-New users start with full credits (256). Anonymous identity via CF-Connecting-IP hash.
+Batch size is independent of the cooldown; it is validated separately
+(MAX_BATCH_SIZE = 2048). Anonymous identity via CF-Connecting-IP hash.
 
 ## Security
 
-- **Rate limiting**: Atomic Lua script prevents race conditions
+- **Rate limiting**: Atomic `SET NX EX` prevents race conditions
 - **Identity**: CF-Connecting-IP (set by Cloudflare, unspoofable)
 - **Input validation**: Bounds checking, type checking, integer validation on all pixel data
-- **Batch cap**: Max 32 pixels per request to limit burst damage
+- **Batch cap**: Max 2048 pixels per request + request body size guard
 - **DO isolation**: /broadcast route only reachable via DO stub, not externally

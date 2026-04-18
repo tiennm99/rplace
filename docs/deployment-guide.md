@@ -62,7 +62,7 @@ npx wrangler domains add rplace.yourdomain.com
 |---|---|---|
 | CF Workers | 100K requests/day | Canvas reads + pixel placements |
 | CF Durable Objects | Free with Workers | WebSocket connections |
-| Upstash Redis | 10K commands/day | BITFIELD reads/writes + rate limiting |
+| Upstash Redis | 10K commands/day | BITFIELD reads/writes + cooldown SET NX EX |
 
 For hobby traffic (< few hundred users/day), free tiers are sufficient. Upstash pay-as-you-go ($0.2/100K commands) is the first thing to hit limits.
 
@@ -71,4 +71,4 @@ For hobby traffic (< few hundred users/day), free tiers are sufficient. Upstash 
 - **Canvas loads empty**: Check Upstash credentials in secrets
 - **Pixels don't persist**: Verify BITFIELD support — test with `redis-cli BITFIELD canvas SET u5 #0 1`
 - **WebSocket not connecting**: Ensure Durable Object migration ran (check `wrangler.json` migrations)
-- **Rate limiting not working**: Verify `redis.eval()` works on your Upstash tier (Lua scripting)
+- **Rate limiting not working**: Verify `SET key value NX EX 1` returns `"OK"` / `null` as expected on your Upstash tier

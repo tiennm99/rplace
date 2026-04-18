@@ -1,14 +1,12 @@
 <script>
-  import { MAX_CREDITS, CREDIT_REGEN_RATE, MAX_BATCH_SIZE } from '../lib/constants.js';
+  import { MAX_BATCH_SIZE } from '../lib/constants.js';
   import CanvasRenderer from './components/CanvasRenderer.svelte';
   import ColorPicker from './components/ColorPicker.svelte';
   import CanvasControls from './components/CanvasControls.svelte';
   import DrawToolbar from './components/DrawToolbar.svelte';
-  import UserInfo from './components/UserInfo.svelte';
   import ImageImporter from './components/ImageImporter.svelte';
 
   let selectedColor = $state(27); // black
-  let credits = $state(MAX_CREDITS);
   let cursorPos = $state({ x: 0, y: 0 });
   let zoom = $state(1);
   let mode = $state('paint');
@@ -26,16 +24,6 @@
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toast = null; }, ttlMs);
   }
-
-  // Client-side credit regeneration (server corrects on submit)
-  $effect(() => {
-    const interval = setInterval(() => {
-      if (credits < MAX_CREDITS) {
-        credits = Math.min(credits + CREDIT_REGEN_RATE, MAX_CREDITS);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  });
 
   // WebSocket connection with auto-reconnect + exponential backoff
   let wsRetryDelay = 1000;
@@ -113,7 +101,6 @@
       if (!res.ok) {
         if (res.status === 429) {
           const retryAfter = data?.retryAfter ?? '?';
-          if (typeof data?.remaining === 'number') credits = data.remaining;
           showToast('error', `Rate limited — try again in ${retryAfter}s.`, 6000);
         } else if (res.status === 413) {
           showToast('error', 'Request too large. Reduce batch size.');
@@ -126,7 +113,6 @@
       }
 
       if (data?.ok) {
-        credits = data.credits;
         canvasRenderer.commitPending();
         showToast('info', 'Submitted', 1500);
       } else {
@@ -177,7 +163,6 @@
     {submitting}
   />
   <ColorPicker {selectedColor} onSelect={(i) => selectedColor = i} />
-  <UserInfo {credits} />
 
   {#if !importerOpen}
     <button class="import-btn" onclick={() => importerOpen = true}
@@ -192,7 +177,6 @@
     getCommittedColor={(x, y) => canvasRenderer?.getCommittedColor(x, y) ?? -1}
     setOverlay={(o) => canvasRenderer?.setOverlay(o)}
     onClose={() => importerOpen = false}
-    onCredits={(c) => credits = c}
   />
 
   {#if toast}

@@ -7,16 +7,14 @@ vi.mock('../src/lib/canvas-storage.js', () => ({
   setPixels: vi.fn(() => Promise.resolve()),
 }));
 vi.mock('../src/lib/rate-limiter.js', () => ({
-  checkAndDeductCredits: vi.fn(() =>
-    Promise.resolve({ allowed: true, remaining: 100, retryAfter: 0 }),
-  ),
+  checkRateLimit: vi.fn(() => Promise.resolve({ allowed: true, retryAfter: 0 })),
 }));
 vi.mock('../src/durable-objects/canvas-room.js', () => ({
   CanvasRoom: class {},
 }));
 
 import app from '../src/worker.js';
-import { checkAndDeductCredits } from '../src/lib/rate-limiter.js';
+import { checkRateLimit } from '../src/lib/rate-limiter.js';
 
 /** Helper to create POST request */
 function postPlace(body) {
@@ -127,23 +125,24 @@ describe('POST /api/place validation', () => {
   });
 
   it('returns 429 when rate limited', async () => {
-    checkAndDeductCredits.mockResolvedValue({ allowed: false, remaining: 0, retryAfter: 5 });
+    checkRateLimit.mockResolvedValue({ allowed: false, retryAfter: 1 });
     const res = await app.fetch(postPlace({ pixels: [{ x: 0, y: 0, color: 0 }] }), env);
     expect(res.status).toBe(429);
-    expect((await res.json()).error).toBe('rate_limited');
+    const data = await res.json();
+    expect(data.error).toBe('rate_limited');
+    expect(data.retryAfter).toBe(1);
   });
 
   it('accepts valid pixel placement', async () => {
-    checkAndDeductCredits.mockResolvedValue({ allowed: true, remaining: 255, retryAfter: 0 });
+    checkRateLimit.mockResolvedValue({ allowed: true, retryAfter: 0 });
     const res = await app.fetch(postPlace({ pixels: [{ x: 0, y: 0, color: 0 }] }), env);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.ok).toBe(true);
-    expect(data.credits).toBe(255);
   });
 
   it('accepts boundary pixel values', async () => {
-    checkAndDeductCredits.mockResolvedValue({ allowed: true, remaining: 255, retryAfter: 0 });
+    checkRateLimit.mockResolvedValue({ allowed: true, retryAfter: 0 });
     const res = await app.fetch(postPlace({
       pixels: [{ x: CANVAS_WIDTH - 1, y: CANVAS_HEIGHT - 1, color: MAX_COLORS - 1 }],
     }), env);
