@@ -3,34 +3,49 @@ import { CANVAS_WIDTH, TOTAL_PIXELS, REDIS_CANVAS_KEY } from './constants.js';
 
 const CANVAS_BYTES = TOTAL_PIXELS;
 
+// Upstash REST returns binary as base64 (~4/3 overhead) and caps responses at
+// 10 MB on the Free plan. 4 MiB raw → ~5.33 MB base64, safely under the limit,
+// and divides a 16 MiB canvas into exactly 4 chunks.
+const CHUNK_BYTES = 4 * 1024 * 1024;
+
 /**
  * Get the full canvas as a Uint8Array of raw bytes.
- * Uses raw REST API to avoid SDK binary encoding corruption.
- * Returns a zero-filled buffer if canvas doesn't exist yet.
+ * Fetches in parallel chunks to stay under Upstash's per-request size cap.
+ * Returns a zero-filled buffer if canvas doesn't exist yet; truncated chunks
+ * are zero-padded (GETRANGE clamps past-end reads to "" by default).
  * @param {object} env
  * @returns {Promise<Uint8Array>}
  */
 export async function getFullCanvas(env) {
-  // Use base64 encoding for binary-safe transport of BITFIELD data
-  const base64 = await redisRawBinary(env, ['GETRANGE', REDIS_CANVAS_KEY, '0', String(CANVAS_BYTES - 1)]);
-
-  if (!base64 || base64.length === 0) {
-    return new Uint8Array(CANVAS_BYTES);
+  const ranges = [];
+  for (let start = 0; start < CANVAS_BYTES; start += CHUNK_BYTES) {
+    const end = Math.min(start + CHUNK_BYTES, CANVAS_BYTES) - 1;
+    ranges.push([start, end]);
   }
 
-  const raw = atob(base64);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    bytes[i] = raw.charCodeAt(i);
+  const results = await Promise.all(
+    ranges.map(([start, end]) =>
+      redisRawBinary(env, ['GETRANGE', REDIS_CANVAS_KEY, String(start), String(end)])
+    )
+  );
+
+  const out = new Uint8Array(CANVAS_BYTES);
+  let totalRead = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    const base64 = results[i];
+    if (!base64) continue;
+    const raw = atob(base64);
+    const offset = ranges[i][0];
+    for (let j = 0; j < raw.length; j++) {
+      out[offset + j] = raw.charCodeAt(j);
+    }
+    totalRead += raw.length;
   }
 
-  if (bytes.length < CANVAS_BYTES) {
-    console.warn(`Canvas read truncated: got ${bytes.length} bytes, expected ${CANVAS_BYTES}; zero-padding tail`);
-    const padded = new Uint8Array(CANVAS_BYTES);
-    padded.set(bytes);
-    return padded;
+  if (totalRead > 0 && totalRead < CANVAS_BYTES) {
+    console.warn(`Canvas read short: got ${totalRead} bytes, expected ${CANVAS_BYTES}; zero-padding tail`);
   }
-  return bytes;
+  return out;
 }
 
 /**
