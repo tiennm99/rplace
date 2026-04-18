@@ -1,12 +1,12 @@
 <script>
-  import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
+  import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_BATCH_SIZE, REQUEST_COOLDOWN_SEC } from '../../lib/constants.js';
   import { rgbaToPalette, paletteToRgba, DITHER_METHODS } from '../../lib/image-to-palette.js';
   import { resizeRgba } from '../../lib/image-resize.js';
   import { transformRgba } from '../../lib/image-transform.js';
   import { applyColorCorrection } from '../../lib/image-color-correction.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
 
-  let { open, cursorPos, getCommittedColor, setOverlay, onClose, onCredits } = $props();
+  let { open, cursorPos, getCommittedColor, setOverlay, onClose } = $props();
 
   // Source image (decoded, palette-mapped)
   let fileName = $state(null);
@@ -255,7 +255,6 @@
 
     uploader = createImageUploader({
       onProgress: (p) => { placed = p; },
-      onCredits: (c) => onCredits?.(c),
       onStatus: (s) => { statusText = s; },
       onError: (e) => { errorText = e.message || String(e); },
     });
@@ -288,7 +287,7 @@
   const pct = $derived(total > 0 ? (placed / total) * 100 : 0);
   const etaSec = $derived(
     status === 'running' && total > placed
-      ? Math.ceil((total - placed)) // ~1 pixel/sec steady state
+      ? Math.ceil((total - placed) / MAX_BATCH_SIZE) * REQUEST_COOLDOWN_SEC
       : null,
   );
 </script>

@@ -6,11 +6,11 @@ A collaborative pixel art canvas inspired by [Reddit's r/place](https://www.redd
 
 - **2048x2048 canvas** with 32-color palette (from [rplace.live](https://rplace.live/))
 - **Real-time updates** via WebSocket (Cloudflare Durable Objects)
-- **Batch pixel placement** up to 32 pixels per request
-- **Stackable credit system** — earn 1 pixel/sec, stack up to 256, spend in batches
+- **Batch pixel placement** up to 2048 pixels per request
+- **Rate limit** — 1 request per second per user (batch size independent)
 - **Zoom/pan** with mouse wheel + drag (desktop) and pinch-zoom + drag (mobile)
 - **Long-press to place** on touch devices
-- **Credit bar** with visual regeneration feedback
+- **Image importer** — upload, dither, and auto-paint images onto the canvas
 
 ## Tech Stack
 
@@ -19,7 +19,7 @@ A collaborative pixel art canvas inspired by [Reddit's r/place](https://www.redd
 | Frontend | [Svelte 5](https://svelte.dev/) (runes) + HTML5 Canvas |
 | Backend | [Hono](https://hono.dev/) on Cloudflare Workers |
 | Real-time | WebSocket via Cloudflare Durable Objects |
-| Storage | [Upstash Redis](https://upstash.com/) (BITFIELD for canvas, Lua for rate limiting) |
+| Storage | [Upstash Redis](https://upstash.com/) (BITFIELD for canvas, SET NX EX for rate limiting) |
 | Build | [Vite](https://vite.dev/) |
 
 ## Architecture
@@ -32,12 +32,12 @@ Browser (Svelte SPA + WebSocket)
   v
 Cloudflare Worker (Hono)
   ├── Canvas API (read/write pixels via Redis BITFIELD)
-  ├── Rate Limiter (Lua script, atomic token bucket)
+  ├── Rate Limiter (SET NX EX — atomic per-user cooldown)
   └── Durable Object (WebSocket broadcast to all clients)
         ↕
 Upstash Redis
   ├── BITFIELD "canvas" (5-bit per pixel, 2048x2048 = 2.62MB)
-  └── HASH "credits:{userId}" (lastUpdate + credits)
+  └── STRING "cooldown:{userId}" (1s TTL, blocks repeat requests)
 ```
 
 ## Getting Started
@@ -94,17 +94,19 @@ src/
 │   ├── redis-client.js                # Upstash Redis factory
 │   ├── canvas-storage.js              # BITFIELD read/write
 │   ├── canvas-decoder.js              # 5-bit → RGBA (client-side)
-│   ├── rate-limiter.js                # Lua token bucket
+│   ├── rate-limiter.js                # SET NX EX cooldown
+│   ├── image-uploader.js              # Browser-side batched uploader
 │   └── get-user-id.js                 # IP-based identity
 ├── client/
 │   ├── main.js                        # Svelte mount
-│   ├── App.svelte                     # Root + WebSocket + credit timer
+│   ├── App.svelte                     # Root + WebSocket
 │   ├── app.css                        # Global styles
 │   └── components/
 │       ├── CanvasRenderer.svelte      # Canvas + zoom/pan + touch
 │       ├── ColorPicker.svelte         # 32-color palette grid
 │       ├── CanvasControls.svelte      # Zoom buttons + coordinates
-│       └── UserInfo.svelte            # Credit counter + bar
+│       ├── DrawToolbar.svelte         # Paint / submit / undo / redo
+│       └── ImageImporter.svelte       # Image-to-canvas uploader
 └── index.html                         # Vite entry
 ```
 
@@ -126,10 +128,11 @@ Place pixels on the canvas.
 }
 ```
 
-**Response:** `{ "ok": true, "credits": 255 }`
+**Response:** `{ "ok": true }`
 
 **Errors:**
-- `400` — invalid pixel data or batch > 32
+- `400` — invalid pixel data or batch > 2048
+- `413` — request body too large
 - `429` — rate limited (includes `retryAfter` seconds)
 
 ### `WS /api/ws`
@@ -149,9 +152,8 @@ Key constants in `src/lib/constants.js`:
 | `CANVAS_WIDTH` | 2048 | Canvas width in pixels |
 | `CANVAS_HEIGHT` | 2048 | Canvas height in pixels |
 | `MAX_COLORS` | 32 | Number of colors in palette |
-| `MAX_BATCH_SIZE` | 32 | Max pixels per placement request |
-| `MAX_CREDITS` | 256 | Max stackable credits |
-| `CREDIT_REGEN_RATE` | 1 | Credits earned per second |
+| `MAX_BATCH_SIZE` | 2048 | Max pixels per placement request |
+| `REQUEST_COOLDOWN_SEC` | 1 | Minimum seconds between requests per user |
 
 ## Credits & References
 

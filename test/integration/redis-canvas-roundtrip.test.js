@@ -153,82 +153,32 @@ describe('Redis BITFIELD canvas round-trip', () => {
   });
 });
 
-describe('Redis rate limiter Lua script', () => {
-  const CREDIT_SCRIPT = `
-local data = redis.call('HGETALL', KEYS[1])
-local lastUpdate = 0
-local credits = tonumber(ARGV[3])
+describe('Redis rate limiter cooldown (SET NX EX)', () => {
+  const COOLDOWN_SEC = 1;
+  const key = 'rplace:cooldown:test-user';
 
-if #data > 0 then
-  for i = 1, #data, 2 do
-    if data[i] == 'lu' then lastUpdate = tonumber(data[i+1]) end
-    if data[i] == 'cr' then credits = tonumber(data[i+1]) end
-  end
-end
-
-local elapsed = tonumber(ARGV[2]) - lastUpdate
-local accrued = math.min(tonumber(ARGV[3]), credits + math.floor(elapsed * tonumber(ARGV[4])))
-local count = tonumber(ARGV[1])
-
-if accrued < count then
-  return {0, accrued, count - accrued}
-end
-
-local remaining = accrued - count
-redis.call('HSET', KEYS[1], 'lu', ARGV[2], 'cr', remaining)
-redis.call('EXPIRE', KEYS[1], 86400)
-return {1, remaining, 0}
-`;
-
-  const MAX_CREDITS = 256;
-  const REGEN_RATE = 1;
-  const key = 'rplace:credits:test-user';
-
-  async function checkCredits(count, now) {
-    return redis.eval(CREDIT_SCRIPT, 1, key, count, now, MAX_CREDITS, REGEN_RATE);
+  /** Mirrors checkRateLimit: SET key "1" NX EX <cooldown>. */
+  async function tryAcquire() {
+    const res = await redis.set(key, '1', 'EX', COOLDOWN_SEC, 'NX');
+    return res === 'OK';
   }
 
-  it('grants full credits to new user', async () => {
+  it('allows first request for a fresh user', async () => {
     await redis.del(key);
-    const result = await checkCredits(1, 1000);
-    expect(result[0]).toBe(1);  // allowed
-    expect(result[1]).toBe(255); // remaining
-    expect(result[2]).toBe(0);  // retryAfter
+    expect(await tryAcquire()).toBe(true);
   });
 
-  it('deducts credits correctly', async () => {
+  it('rejects second request within cooldown window', async () => {
     await redis.del(key);
-    await checkCredits(10, 1000);
-    // 256 - 10 = 246, no time passed so no regen
-    const result = await checkCredits(5, 1000);
-    expect(result[0]).toBe(1);
-    expect(result[1]).toBe(241); // 246 - 5
+    expect(await tryAcquire()).toBe(true);
+    expect(await tryAcquire()).toBe(false);
   });
 
-  it('regenerates credits over time', async () => {
+  it('allows again after cooldown expires', async () => {
     await redis.del(key);
-    await checkCredits(256, 1000); // spend all (remaining = 0)
-    // Wait 10 seconds → 10 credits regenerated
-    const result = await checkCredits(5, 1010);
-    expect(result[0]).toBe(1);
-    expect(result[1]).toBe(5); // 10 regen - 5 spent
-  });
-
-  it('rejects when insufficient credits', async () => {
-    await redis.del(key);
-    await checkCredits(256, 1000); // spend all
-    // No time passed, 0 credits
-    const result = await checkCredits(1, 1000);
-    expect(result[0]).toBe(0); // denied
-    expect(result[2]).toBe(1); // retryAfter = 1 credit needed
-  });
-
-  it('caps credits at MAX_CREDITS', async () => {
-    await redis.del(key);
-    await checkCredits(1, 1000); // remaining = 255
-    // Wait a very long time → should cap at 256
-    const result = await checkCredits(1, 2000);
-    expect(result[0]).toBe(1);
-    expect(result[1]).toBe(255); // 256 (capped) - 1
-  });
+    expect(await tryAcquire()).toBe(true);
+    // Wait slightly longer than cooldown for the EX key to expire.
+    await new Promise((r) => setTimeout(r, (COOLDOWN_SEC * 1000) + 100));
+    expect(await tryAcquire()).toBe(true);
+  }, 5000);
 });

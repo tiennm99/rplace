@@ -46,5 +46,5 @@ src/
 
 ## API Response Format
 
-Success: `{ ok: true, credits: N }`
-Error: `{ error: "error_code", ...details }` with appropriate HTTP status
+Success: `{ ok: true }`
+Error: `{ error: "error_code", ...details }` with appropriate HTTP status (e.g., `retryAfter` on 429)
