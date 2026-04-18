@@ -191,8 +191,14 @@
       srcRgba = data;
       srcWidth = w;
       srcHeight = h;
-      resizeW = w;
-      resizeH = h;
+      // Cap initial output to canvas bounds. A full-res photo (e.g. 6000×4000)
+      // running through the palette pipeline on load would otherwise freeze
+      // the main thread. User can still scale up via the W/H inputs.
+      const maxW = Math.max(1, CANVAS_WIDTH - originX);
+      const maxH = Math.max(1, CANVAS_HEIGHT - originY);
+      const ratio = Math.min(maxW / w, maxH / h, 1);
+      resizeW = Math.max(1, Math.floor(w * ratio));
+      resizeH = Math.max(1, Math.floor(h * ratio));
       // paletteIndices recomputed reactively via $effect below.
     } catch (err) {
       errorText = `Failed to load image: ${err.message || err}`;

@@ -25,6 +25,28 @@ export function nearestColorIndex(r, g, b) {
   return best;
 }
 
+// 5-bit-per-channel RGB→palette LUT. 32³ = 32,768 entries (32 KB).
+// Build cost ≈ 32³ × 256 ≈ 8M ops, amortized across millions of pixel lookups.
+let _lut = null;
+function buildLut() {
+  const lut = new Uint8Array(32 * 32 * 32);
+  for (let r5 = 0; r5 < 32; r5++) {
+    const r = (r5 << 3) | 4;
+    for (let g5 = 0; g5 < 32; g5++) {
+      const g = (g5 << 3) | 4;
+      for (let b5 = 0; b5 < 32; b5++) {
+        const b = (b5 << 3) | 4;
+        lut[(r5 << 10) | (g5 << 5) | b5] = nearestColorIndex(r, g, b);
+      }
+    }
+  }
+  return lut;
+}
+function lutNearest(r, g, b) {
+  if (!_lut) _lut = buildLut();
+  return _lut[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)];
+}
+
 /**
  * Convert an RGBA pixel buffer into a flat array of palette indices.
  * Pixels with alpha < threshold become -1 (caller should skip on upload).
@@ -99,7 +121,7 @@ function quantizeNearest(rgba, width, height, alphaThreshold) {
   for (let i = 0; i < count; i++) {
     const off = i * 4;
     if (rgba[off + 3] < alphaThreshold) { out[i] = -1; continue; }
-    out[i] = nearestColorIndex(rgba[off], rgba[off + 1], rgba[off + 2]);
+    out[i] = lutNearest(rgba[off], rgba[off + 1], rgba[off + 2]);
   }
   return out;
 }
@@ -122,7 +144,7 @@ function runErrorDiffusion(rgba, width, height, alphaThreshold, kernel) {
       if (rgba[i * 4 + 3] < alphaThreshold) { out[i] = -1; continue; }
 
       const r = buf[i * 3], g = buf[i * 3 + 1], b = buf[i * 3 + 2];
-      const idx = nearestColorIndex(
+      const idx = lutNearest(
         r < 0 ? 0 : r > 255 ? 255 : r,
         g < 0 ? 0 : g > 255 ? 255 : g,
         b < 0 ? 0 : b > 255 ? 255 : b,
@@ -165,7 +187,7 @@ function runOrderedDither(rgba, width, height, alphaThreshold, matrix) {
       const r = rgba[i * 4] + bias;
       const g = rgba[i * 4 + 1] + bias;
       const b = rgba[i * 4 + 2] + bias;
-      out[i] = nearestColorIndex(
+      out[i] = lutNearest(
         r < 0 ? 0 : r > 255 ? 255 : r,
         g < 0 ? 0 : g > 255 ? 255 : g,
         b < 0 ? 0 : b > 255 ? 255 : b,
