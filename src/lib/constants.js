@@ -3,9 +3,8 @@ export const CANVAS_WIDTH = 4096;
 export const CANVAS_HEIGHT = 4096;
 export const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
 
-/** Color encoding: 1 byte per pixel, 256 palette entries. Byte-aligned means
- *  the raw Redis bytes are directly the pixel indices — no bit-level decode. */
-export const BITS_PER_PIXEL = 8;
+/** 1 byte per pixel, 256 palette entries — the raw Redis bytes are directly
+ *  the pixel indices, no bit-level decode. */
 export const MAX_COLORS = 256;
 
 /** Rate limiting — one request per second per user, batch size independent. */

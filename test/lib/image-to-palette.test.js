@@ -32,13 +32,6 @@ describe('rgbaToPalette', () => {
     expect(idx[0]).toBe(-1);
   });
 
-  it('dither:true is equivalent to method:"floyd"', () => {
-    const src = solidRgba(4, 4, 120, 120, 120);
-    const a = rgbaToPalette(src, 4, 4, { dither: true });
-    const b = rgbaToPalette(src, 4, 4, { method: 'floyd' });
-    expect([...a]).toEqual([...b]);
-  });
-
   it('throws on unknown method', () => {
     const src = solidRgba(1, 1, 0, 0, 0);
     expect(() => rgbaToPalette(src, 1, 1, { method: 'nope' })).toThrow(/nope/i);

@@ -1,7 +1,6 @@
 import { redisRaw, redisRawBinary } from './redis-client.js';
 import { CANVAS_WIDTH, TOTAL_PIXELS, REDIS_CANVAS_KEY } from './constants.js';
 
-/** Total bytes needed for the canvas — 1 byte per pixel (u8 palette index). */
 const CANVAS_BYTES = TOTAL_PIXELS;
 
 /**

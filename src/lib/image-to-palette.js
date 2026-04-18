@@ -51,15 +51,12 @@ function lutNearest(r, g, b) {
  * Convert an RGBA pixel buffer into a flat array of palette indices.
  * Pixels with alpha < threshold become -1 (caller should skip on upload).
  *
- * Back-compat: `dither: true` is treated as `method: 'floyd'`.
- *
  * @param {Uint8Array|Uint8ClampedArray|number[]} rgba - length = width*height*4
  * @param {number} width
  * @param {number} height
  * @param {Object} [options]
  * @param {number} [options.alphaThreshold=128]
- * @param {boolean} [options.dither=false] - legacy; prefer `method`
- * @param {('none'|'floyd'|'atkinson'|'jarvis'|'burkes'|'sierra'|'sierra-lite'|'bayer-2'|'bayer-4'|'bayer-8')} [options.method]
+ * @param {('none'|'floyd'|'atkinson'|'jarvis'|'burkes'|'sierra'|'sierra-lite'|'bayer-2'|'bayer-4'|'bayer-8')} [options.method='none']
  * @param {boolean} [options.skipWhite=false] - mark near-white source pixels as transparent
  * @param {number}  [options.whiteThreshold=230] - r,g,b >= this counts as "white"
  * @param {boolean} [options.paintTransparent=false] - treat transparent pixels as opaque white before quantizing
@@ -68,12 +65,11 @@ function lutNearest(r, g, b) {
 export function rgbaToPalette(rgba, width, height, options = {}) {
   const {
     alphaThreshold = 128,
-    dither = false,
+    method = 'none',
     skipWhite = false,
     whiteThreshold = 230,
     paintTransparent = false,
   } = options;
-  const method = options.method ?? (dither ? 'floyd' : 'none');
 
   // Substitute transparent→opaque white up-front so the rest of the pipeline
   // sees a consistent buffer. We only clone when substitutions actually occur.

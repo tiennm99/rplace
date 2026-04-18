@@ -6,7 +6,7 @@
   import DrawToolbar from './components/DrawToolbar.svelte';
   import ImageImporter from './components/ImageImporter.svelte';
 
-  let selectedColor = $state(0); // palette index 0 = black (first grayscale step)
+  let selectedColor = $state(0);
   let cursorPos = $state({ x: 0, y: 0 });
   let zoom = $state(1);
   let mode = $state('paint');

@@ -8,7 +8,7 @@
  */
 
 const FS = 1 / 16;
-export const KERNEL_FLOYD = [
+const KERNEL_FLOYD = [
   [ 1, 0, 7 * FS],
   [-1, 1, 3 * FS],
   [ 0, 1, 5 * FS],
@@ -17,7 +17,7 @@ export const KERNEL_FLOYD = [
 
 // Atkinson (original Mac) — only diffuses 6/8 of the error; gives a softer look.
 const ATK = 1 / 8;
-export const KERNEL_ATKINSON = [
+const KERNEL_ATKINSON = [
   [ 1, 0, ATK],
   [ 2, 0, ATK],
   [-1, 1, ATK],
@@ -28,7 +28,7 @@ export const KERNEL_ATKINSON = [
 
 // Jarvis-Judice-Ninke — 12-entry kernel over 3 rows, smoother than FS.
 const JJN = 1 / 48;
-export const KERNEL_JARVIS = [
+const KERNEL_JARVIS = [
   [ 1, 0, 7 * JJN], [ 2, 0, 5 * JJN],
   [-2, 1, 3 * JJN], [-1, 1, 5 * JJN], [0, 1, 7 * JJN], [1, 1, 5 * JJN], [2, 1, 3 * JJN],
   [-2, 2, 1 * JJN], [-1, 2, 3 * JJN], [0, 2, 5 * JJN], [1, 2, 3 * JJN], [2, 2, 1 * JJN],
@@ -36,14 +36,14 @@ export const KERNEL_JARVIS = [
 
 // Burkes
 const BUR = 1 / 32;
-export const KERNEL_BURKES = [
+const KERNEL_BURKES = [
   [ 1, 0, 8 * BUR], [ 2, 0, 4 * BUR],
   [-2, 1, 2 * BUR], [-1, 1, 4 * BUR], [0, 1, 8 * BUR], [1, 1, 4 * BUR], [2, 1, 2 * BUR],
 ];
 
 // Sierra (3-line)
 const SIE = 1 / 32;
-export const KERNEL_SIERRA = [
+const KERNEL_SIERRA = [
   [ 1, 0, 5 * SIE], [ 2, 0, 3 * SIE],
   [-2, 1, 2 * SIE], [-1, 1, 4 * SIE], [0, 1, 5 * SIE], [1, 1, 4 * SIE], [2, 1, 2 * SIE],
   [-1, 2, 2 * SIE], [0, 2, 3 * SIE], [1, 2, 2 * SIE],
@@ -51,7 +51,7 @@ export const KERNEL_SIERRA = [
 
 // Sierra Lite — cheapest non-trivial
 const SLT = 1 / 4;
-export const KERNEL_SIERRA_LITE = [
+const KERNEL_SIERRA_LITE = [
   [ 1, 0, 2 * SLT],
   [-1, 1, 1 * SLT],
   [ 0, 1, 1 * SLT],

@@ -37,7 +37,6 @@ export function createPipeline() {
       slots.T = slots.R = slots.C = null;
     },
     hasSource() { return src !== null; },
-    source() { return src; },
 
     /**
      * @param {{
