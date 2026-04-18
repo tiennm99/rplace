@@ -1,6 +1,9 @@
 <script>
   let { mode, onModeChange, onSubmit, onUndo, onRedo, onClear,
-        canUndo, canRedo, pixelCount, submitting } = $props();
+        canUndo, canRedo, pixelCount, submitting, cooldownMs = 0 } = $props();
+
+  const onCooldown = $derived(cooldownMs > 0);
+  const cooldownLabel = $derived(`${(cooldownMs / 1000).toFixed(cooldownMs >= 1000 ? 0 : 1)}s`);
 </script>
 
 <div class="toolbar">
@@ -22,8 +25,12 @@
 
   <div class="sep"></div>
 
-  <button class="submit-btn" onclick={onSubmit} disabled={pixelCount === 0 || submitting}>
-    {submitting ? 'Sending...' : `Submit${pixelCount > 0 ? ` (${pixelCount})` : ''}`}
+  <button class="submit-btn" onclick={onSubmit}
+    disabled={pixelCount === 0 || submitting || onCooldown}
+    title={onCooldown ? `Cooldown — ${cooldownLabel} left` : 'Submit pending pixels'}>
+    {#if submitting}Sending...
+    {:else if onCooldown}Wait {cooldownLabel}
+    {:else}Submit{pixelCount > 0 ? ` (${pixelCount})` : ''}{/if}
   </button>
 </div>
 

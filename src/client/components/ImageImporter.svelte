@@ -5,8 +5,16 @@
   import { transformRgba } from '../../lib/image-transform.js';
   import { applyColorCorrection } from '../../lib/image-color-correction.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
+  import { onMount } from 'svelte';
+  import {
+    rgbaToDataUrl, dataUrlToRgba,
+    saveJob, loadJob, updateJobProgress, clearJob,
+  } from '../../lib/image-job-storage.js';
 
-  let { open, cursorPos, getCommittedColor, setOverlay, onClose } = $props();
+  let { open, getCommittedColor, setOverlay, onClose, onRequestPick } = $props();
+
+  // True while THIS panel requested a pick and is still waiting for the result.
+  let picking = $state(false);
 
   // Source image (decoded, palette-mapped)
   let fileName = $state(null);
@@ -60,6 +68,104 @@
   let errorText = $state(null);
   /** @type {ReturnType<typeof createImageUploader>|null} */
   let uploader = null;
+
+  // Resume banner for a prior unfinished job.
+  /** @type {null | {placed: number, total: number, fileName: string, startedAt: number}} */
+  let resumable = $state(null);
+
+  // Current job's starting index into the built pixel list, used by the uploader
+  // to skip pixels that were already placed before a refresh.
+  let jobStartPlaced = 0;
+
+  onMount(() => {
+    const j = loadJob();
+    if (j && j.total > 0 && j.placed < j.total) {
+      resumable = {
+        placed: j.placed, total: j.total,
+        fileName: j.fileName || '(image)',
+        startedAt: j.startedAt || 0,
+      };
+    }
+  });
+
+  /** Snapshot the current pipeline inputs into a job record (minus placed/total which are added later). */
+  function buildJobRecord() {
+    return {
+      fileName,
+      originX, originY,
+      resizeW, resizeH, resampleMethod,
+      ditherMethod, skipWhite, whiteThreshold, paintTransparent,
+      flipH, flipV, rotation,
+      brightness, contrast, saturation, gamma,
+      skipMatching,
+    };
+  }
+
+  async function saveJobStart(totalCount) {
+    if (!srcRgba) return;
+    const srcDataUrl = await rgbaToDataUrl(srcRgba, srcWidth, srcHeight);
+    if (!srcDataUrl) return;
+    const record = {
+      ...buildJobRecord(),
+      srcDataUrl, srcWidth, srcHeight,
+      placed: jobStartPlaced,
+      total: totalCount,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    saveJob(record);
+  }
+
+  function saveJobProgress(p) {
+    updateJobProgress(p);
+  }
+
+  function clearSavedJob() {
+    clearJob();
+    resumable = null;
+  }
+
+  async function resumeJob() {
+    const j = loadJob();
+    if (!j || !j.srcDataUrl) { resumable = null; return; }
+
+    errorText = null;
+    const decoded = await dataUrlToRgba(j.srcDataUrl);
+    if (!decoded) {
+      errorText = 'Failed to decode saved image.';
+      return;
+    }
+
+    // Restore source + config — the reactive pipeline will regenerate paletteIndices.
+    fileName = j.fileName ?? null;
+    srcRgba = decoded.rgba;
+    srcWidth = decoded.width;
+    srcHeight = decoded.height;
+    originX = j.originX ?? 0;
+    originY = j.originY ?? 0;
+    resizeW = j.resizeW ?? decoded.width;
+    resizeH = j.resizeH ?? decoded.height;
+    resampleMethod = j.resampleMethod ?? 'nearest';
+    ditherMethod = j.ditherMethod ?? 'none';
+    skipWhite = !!j.skipWhite;
+    whiteThreshold = j.whiteThreshold ?? 230;
+    paintTransparent = !!j.paintTransparent;
+    flipH = !!j.flipH;
+    flipV = !!j.flipV;
+    rotation = j.rotation ?? 0;
+    brightness = j.brightness ?? 0;
+    contrast = j.contrast ?? 0;
+    saturation = j.saturation ?? 0;
+    gamma = j.gamma ?? 1;
+    skipMatching = j.skipMatching ?? true;
+
+    jobStartPlaced = j.placed ?? 0;
+    total = j.total ?? 0;
+    placed = jobStartPlaced;
+    resumable = null;
+    statusText = `Resumed — ${placed}/${total} already placed.`;
+    status = 'idle'; // user hits Start to continue
+  }
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
@@ -205,9 +311,17 @@
     return () => setOverlay?.(null);
   });
 
-  function useCursor() {
-    originX = cursorPos?.x ?? 0;
-    originY = cursorPos?.y ?? 0;
+  function startPickOrigin() {
+    if (picking) {
+      // Second press = cancel the in-flight pick.
+      onRequestPick?.(null);
+      return;
+    }
+    picking = true;
+    onRequestPick?.({
+      pick: ({ x, y }) => { originX = x; originY = y; picking = false; },
+      cancel: () => { picking = false; },
+    });
   }
 
   function validatePlacement() {
@@ -245,11 +359,13 @@
       statusText = 'Nothing to place (all pixels already match).';
       status = 'done';
       placed = 0; total = 0;
+      clearSavedJob();
       return;
     }
 
+    // If resuming, `jobStartPlaced` was set by resumeJob(); otherwise start fresh.
     total = pixels.length;
-    placed = 0;
+    placed = Math.min(jobStartPlaced, total);
     status = 'running';
     statusText = 'Starting…';
 
@@ -257,11 +373,17 @@
       onProgress: (p) => { placed = p; },
       onStatus: (s) => { statusText = s; },
       onError: (e) => { errorText = e.message || String(e); },
+      shouldSkip: skipMatching
+        ? (p) => getCommittedColor?.(p.x, p.y) === p.color
+        : undefined,
+      onCheckpoint: (p) => { saveJobProgress(p); },
     });
 
-    const result = await uploader.run(pixels);
+    await saveJobStart(pixels.length);
+    const result = await uploader.run(pixels, { startPlaced: placed });
     uploader = null;
     placed = result.placed;
+    jobStartPlaced = 0;
 
     if (result.error) {
       status = 'error';
@@ -272,6 +394,7 @@
     } else {
       status = 'done';
       statusText = `Done. Placed ${result.placed} pixels.`;
+      clearSavedJob();
     }
   }
 
@@ -298,6 +421,19 @@
       <strong>Import Image</strong>
       <button class="x" onclick={onClose} aria-label="Close">✕</button>
     </div>
+
+    {#if resumable}
+      <div class="resume">
+        <div class="resume-text">
+          Unfinished job: <strong>{resumable.fileName}</strong>
+          — {resumable.placed}/{resumable.total} placed.
+        </div>
+        <div class="resume-btns">
+          <button class="primary" onclick={resumeJob}>Resume</button>
+          <button onclick={clearSavedJob}>Discard</button>
+        </div>
+      </div>
+    {/if}
 
     <div class="row">
       <label class="file-btn">
@@ -349,7 +485,10 @@
       <div class="row">
         <label>X <input type="number" min="0" max={CANVAS_WIDTH - 1} bind:value={originX} /></label>
         <label>Y <input type="number" min="0" max={CANVAS_HEIGHT - 1} bind:value={originY} /></label>
-        <button onclick={useCursor} title="Set X/Y to current cursor position">Use cursor</button>
+        <button class:active={picking} onclick={startPickOrigin}
+          title="Click on the canvas to set X/Y (Esc to cancel)">
+          {picking ? 'Cancel pick…' : 'Pick on canvas'}
+        </button>
       </div>
 
       <div class="row">
@@ -489,6 +628,25 @@
 
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row.checkbox { gap: 6px; cursor: pointer; }
+
+  .resume {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 10px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid #3b82f6;
+    border-radius: 8px;
+    font-size: 0.82rem;
+  }
+  .resume-text { color: #cde; }
+  .resume-btns { display: flex; gap: 6px; }
+  .resume-btns button {
+    padding: 4px 12px; background: #262626; color: #ddd;
+    border: 1px solid #444; border-radius: 4px; cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .resume-btns button:hover { background: #333; }
+  .resume-btns button.primary { background: #2563eb; border-color: #3b82f6; color: #fff; }
+  .resume-btns button.primary:hover { background: #1d4ed8; }
 
   label { display: flex; align-items: center; gap: 6px; }
   input[type="number"] { width: 70px; padding: 4px 6px; background: #1a1a1a; border: 1px solid #444; color: #eee; border-radius: 4px; }

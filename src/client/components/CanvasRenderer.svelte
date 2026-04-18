@@ -5,7 +5,8 @@
   import { createPixelBuffer } from '../../lib/pixel-buffer.js';
   import { paletteToRgba } from '../../lib/image-to-palette.js';
 
-  let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull } = $props();
+  let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull,
+        pickActive = false, onPick } = $props();
 
   let canvasEl;
   let imageData = null;
@@ -185,6 +186,28 @@
     render();
   }
 
+  /** Offset the pan by (dx, dy) CSS pixels. Used by keyboard pan shortcuts. */
+  export function panBy(dx, dy) {
+    pan.x += dx;
+    pan.y += dy;
+    render();
+  }
+
+  /** Center the viewport on canvas coordinate (x, y). Clamps to canvas bounds. */
+  export function gotoPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const cx = Math.max(0, Math.min(x, CANVAS_WIDTH - 1));
+    const cy = Math.max(0, Math.min(y, CANVAS_HEIGHT - 1));
+    pan.x = window.innerWidth / 2 - cx * zoom;
+    pan.y = window.innerHeight / 2 - cy * zoom;
+    render();
+  }
+
+  /** Cancel any in-progress draw stroke (exposed for Esc shortcut). */
+  export function cancelStrokeIfAny() {
+    cancelStroke();
+  }
+
   export function commitPending() {
     for (const { x, y, color } of buffer.getAllPixels()) {
       committedColors[y * CANVAS_WIDTH + x] = color;
@@ -203,6 +226,9 @@
     if (e.button === 0) {
       dragging = false;
       lastMouse = { x: e.clientX, y: e.clientY };
+      // In pick mode a left-click-without-drag picks a target; we skip stroking
+      // here and defer to mouseUp (so the user can still left-drag to pan).
+      if (pickActive) return;
       if (mode === 'draw') {
         const pos = screenToCanvas(e.clientX, e.clientY);
         addToStroke(pos.x, pos.y);
@@ -220,7 +246,7 @@
     });
 
     if (e.buttons & 1) {
-      if (mode === 'draw') {
+      if (!pickActive && mode === 'draw') {
         addToStroke(pos.x, pos.y);
       } else {
         const dx = e.clientX - lastMouse.x;
@@ -243,7 +269,14 @@
 
   function handleMouseUp(e) {
     if (e.button === 0) {
-      if (mode === 'draw') {
+      if (pickActive) {
+        if (!dragging) {
+          const pos = screenToCanvas(e.clientX, e.clientY);
+          const cx = Math.max(0, Math.min(pos.x, CANVAS_WIDTH - 1));
+          const cy = Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1));
+          onPick?.({ x: cx, y: cy });
+        }
+      } else if (mode === 'draw') {
         finishStroke();
       } else if (!dragging) {
         const pos = screenToCanvas(e.clientX, e.clientY);
@@ -284,7 +317,7 @@
       touchStartTime = Date.now();
       touchMoved = false;
       lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      if (mode === 'draw') {
+      if (!pickActive && mode === 'draw') {
         const pos = screenToCanvas(e.touches[0].clientX, e.touches[0].clientY);
         addToStroke(pos.x, pos.y);
       }
@@ -308,7 +341,7 @@
         y: Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1)),
       });
 
-      if (mode === 'draw') {
+      if (!pickActive && mode === 'draw') {
         addToStroke(pos.x, pos.y);
         lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       } else {
@@ -335,6 +368,16 @@
   }
 
   function handleTouchEnd(e) {
+    if (pickActive) {
+      if (!touchMoved && e.changedTouches.length === 1) {
+        const t = e.changedTouches[0];
+        const pos = screenToCanvas(t.clientX, t.clientY);
+        const cx = Math.max(0, Math.min(pos.x, CANVAS_WIDTH - 1));
+        const cy = Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1));
+        onPick?.({ x: cx, y: cy });
+      }
+      return;
+    }
     if (mode === 'draw') {
       finishStroke();
     } else if (!touchMoved && e.changedTouches.length === 1 && Date.now() - touchStartTime > 300) {

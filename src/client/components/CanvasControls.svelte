@@ -1,19 +1,48 @@
 <script>
-  let { zoom, onZoomIn, onZoomOut, onResetZoom, cursorPos } = $props();
+  import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
+
+  let { zoom, onZoomIn, onZoomOut, onResetZoom, onGoto, cursorPos } = $props();
 
   let zoomLabel = $derived(
     zoom >= 1 ? `${zoom}x` : `1/${1 / zoom}x`
   );
+
+  let gotoValue = $state('');
+
+  function handleGoto() {
+    // Accept "x,y", "x, y", "x y" — tolerant of common separators.
+    const parts = gotoValue.split(/[\s,]+/).filter(Boolean).map(Number);
+    if (parts.length !== 2 || !parts.every(Number.isFinite)) return;
+    const [x, y] = parts;
+    if (x < 0 || y < 0 || x >= CANVAS_WIDTH || y >= CANVAS_HEIGHT) return;
+    onGoto?.(x, y);
+  }
+
+  function handleGotoKey(e) {
+    if (e.key === 'Enter') { e.preventDefault(); handleGoto(); }
+  }
 </script>
 
 <div class="controls">
   <div class="zoom">
-    <button onclick={onZoomOut} title="Zoom out">−</button>
+    <button onclick={onZoomOut} title="Zoom out (E)">−</button>
     <span class="level">{zoomLabel}</span>
-    <button onclick={onZoomIn} title="Zoom in">+</button>
+    <button onclick={onZoomIn} title="Zoom in (Q)">+</button>
     <button onclick={onResetZoom} title="Reset zoom">⟲</button>
   </div>
   <div class="coords">({cursorPos.x}, {cursorPos.y})</div>
+  <form class="goto" onsubmit={(e) => { e.preventDefault(); handleGoto(); }}>
+    <input
+      type="text"
+      placeholder="x,y"
+      value={gotoValue}
+      oninput={(e) => gotoValue = e.currentTarget.value}
+      onkeydown={handleGotoKey}
+      title="Go to canvas coordinate (e.g. 1024,1024)"
+      aria-label="Go to coordinates"
+    />
+    <button type="submit" title="Jump to coordinates (Enter)">go</button>
+  </form>
 </div>
 
 <style>
@@ -67,4 +96,31 @@
     color: #aaa;
     font-variant-numeric: tabular-nums;
   }
+
+  .goto {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .goto input {
+    width: 84px;
+    padding: 4px 6px;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    color: #eee;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .goto input::placeholder { color: #666; }
+  .goto button {
+    padding: 4px 10px;
+    background: #333;
+    color: #ddd;
+    border: 1px solid #555;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .goto button:hover { background: #555; }
 </style>
