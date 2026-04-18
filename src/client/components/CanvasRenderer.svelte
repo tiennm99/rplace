@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { Application, Sprite, Container, Texture } from 'pixi.js';
   import { CANVAS_WIDTH, CANVAS_HEIGHT, COLORS_RGBA, MAX_BATCH_SIZE } from '../../lib/constants.js';
   import { decodeCanvas, indicesToRgba } from '../../lib/canvas-decoder.js';
   import { createPixelBuffer } from '../../lib/pixel-buffer.js';
@@ -24,11 +25,25 @@
   let currentStrokeKeys = new Set();
 
   const buffer = createPixelBuffer();
+
+  // Offscreen canvas holds the "committed+pending" RGBA image. PIXI uses it
+  // as a texture source — we tell PIXI to re-upload when it changes.
   const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
   const offCtx = offscreen.getContext('2d');
 
-  /** Overlay state: image-importer preview rendered on top of committed+pending.
-   *  { x, y, canvas: OffscreenCanvas, alpha } or null. */
+  // PIXI state — initialized asynchronously in onMount.
+  /** @type {Application|null} */
+  let app = null;
+  /** @type {Container|null} */
+  let worldContainer = null; // holds both sprites; pan via position, zoom via scale
+  /** @type {Sprite|null} */
+  let mainSprite = null;
+  /** @type {Sprite|null} */
+  let overlaySprite = null;
+  /** @type {Texture|null} */
+  let mainTexture = null;
+
+  /** Overlay state mirrored outside of pixi so setOverlay() can defer to init. */
   let overlayState = null;
 
   // Touch state
@@ -36,23 +51,19 @@
   let touchStartTime = 0;
   let touchMoved = false;
 
-  // --- Render coalescing ---
-  // Any state change calls render(). Multiple calls within a frame collapse
-  // to one actual paint via requestAnimationFrame. imageDataDirty gates the
-  // expensive putImageData (16 MB copy): only re-upload when pixels changed.
+  // --- Render scheduling ---
+  // PIXI's own ticker is stopped; we render manually, coalesced per frame.
+  // imageDataDirty gates the 16 MB putImageData — only re-upload when pixels
+  // actually changed (setPixelRgba / loadCanvas).
   let rafPending = false;
   let imageDataDirty = true;
-  let pendingEffZoom = null;
 
-  function render(effZoom = zoom) {
-    pendingEffZoom = effZoom;
+  function render() {
     if (rafPending) return;
     rafPending = true;
     requestAnimationFrame(() => {
       rafPending = false;
-      const z = pendingEffZoom;
-      pendingEffZoom = null;
-      doRender(z);
+      doRender();
     });
   }
 
@@ -72,28 +83,18 @@
     pan.y = Math.max(minY, Math.min(maxY, pan.y));
   }
 
-  function doRender(effZoom) {
-    if (!canvasEl || !imageData) return;
-    clampPan(effZoom);
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvasEl.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
-    ctx.setTransform(1, 0, 0, 1, 0, 0); // reset before clear
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-    if (imageDataDirty) {
+  function doRender() {
+    if (!app || !worldContainer) return;
+    clampPan(zoom);
+    // Flush pixel edits to the offscreen, then tell pixi its texture is stale.
+    if (imageDataDirty && imageData) {
       offCtx.putImageData(imageData, 0, 0);
+      mainTexture?.source?.update();
       imageDataDirty = false;
     }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // CSS pixels → device pixels
-    ctx.translate(pan.x, pan.y);
-    ctx.scale(effZoom, effZoom);
-    ctx.drawImage(offscreen, 0, 0);
-    if (overlayState) {
-      ctx.globalAlpha = overlayState.alpha;
-      ctx.drawImage(overlayState.canvas, overlayState.x, overlayState.y);
-      ctx.globalAlpha = 1;
-    }
+    worldContainer.position.set(pan.x, pan.y);
+    worldContainer.scale.set(zoom);
+    app.renderer.render(app.stage);
   }
 
   function screenToCanvas(clientX, clientY) {
@@ -213,6 +214,12 @@
   /** Set or clear the preview overlay drawn on top of the canvas.
    *  @param {{x: number, y: number, width: number, height: number, indices: Int16Array|number[], alpha?: number}|null} overlay */
   export function setOverlay(overlay) {
+    // Tear down any previous overlay sprite + texture.
+    if (overlaySprite) {
+      worldContainer?.removeChild(overlaySprite);
+      overlaySprite.destroy({ texture: true, textureSource: true });
+      overlaySprite = null;
+    }
     if (!overlay || !overlay.indices || overlay.width <= 0 || overlay.height <= 0) {
       overlayState = null;
       render();
@@ -221,9 +228,16 @@
     const { x, y, width, height, indices, alpha = 0.6 } = overlay;
     const rgba = paletteToRgba(indices, width, height);
     const oc = new OffscreenCanvas(width, height);
-    const octx = oc.getContext('2d');
-    octx.putImageData(new ImageData(rgba, width, height), 0, 0);
-    overlayState = { x, y, canvas: oc, alpha };
+    oc.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+    overlayState = { x, y, width, height, canvas: oc, alpha };
+    if (worldContainer) {
+      const tex = Texture.from(oc);
+      tex.source.scaleMode = 'nearest';
+      overlaySprite = new Sprite(tex);
+      overlaySprite.position.set(x, y);
+      overlaySprite.alpha = alpha;
+      worldContainer.addChild(overlaySprite);
+    }
     render();
   }
 
@@ -347,7 +361,7 @@
     pan.x = e.clientX - (e.clientX - pan.x) * (newZoom / zoom);
     pan.y = e.clientY - (e.clientY - pan.y) * (newZoom / zoom);
     if (newZoom !== zoom) onZoomChange(newZoom);
-    render(newZoom); // explicit — covers the case where zoom was clamped
+    render();
   }
 
   // --- Touch handlers ---
@@ -414,7 +428,7 @@
       lastTouchDist = dist;
       lastMouse = center;
       if (newZoom !== zoom) onZoomChange(newZoom);
-      render(newZoom);
+      render();
     }
   }
 
@@ -469,22 +483,86 @@
     }
   }
 
+  async function initPixi() {
+    // Pre-fill the offscreen with a zero-image so the initial texture upload
+    // is valid before loadCanvas() finishes (prevents a one-frame black flash).
+    imageData = new ImageData(
+      new Uint8ClampedArray(CANVAS_WIDTH * CANVAS_HEIGHT * 4),
+      CANVAS_WIDTH, CANVAS_HEIGHT,
+    );
+    offCtx.putImageData(imageData, 0, 0);
+    imageDataDirty = false;
+
+    app = new Application();
+    // Cap DPR at 2 — pixel art gains nothing from 3× and mobile GPUs hate it.
+    const resolution = Math.min(window.devicePixelRatio || 1, 2);
+    await app.init({
+      canvas: canvasEl,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: 0x1a1a1a,
+      resolution,
+      autoDensity: true,
+      antialias: false,
+    });
+    // Stop auto-ticker — we render on demand (via our rAF coalescer) so idle
+    // frames don't burn GPU cycles.
+    app.ticker.stop();
+
+    mainTexture = Texture.from(offscreen);
+    mainTexture.source.scaleMode = 'nearest';
+    mainSprite = new Sprite(mainTexture);
+
+    worldContainer = new Container();
+    worldContainer.addChild(mainSprite);
+    app.stage.addChild(worldContainer);
+
+    // If an overlay was set before init finished, materialize it now.
+    if (overlayState && !overlaySprite) {
+      const tex = Texture.from(overlayState.canvas);
+      tex.source.scaleMode = 'nearest';
+      overlaySprite = new Sprite(tex);
+      overlaySprite.position.set(overlayState.x, overlayState.y);
+      overlaySprite.alpha = overlayState.alpha;
+      worldContainer.addChild(overlaySprite);
+    }
+  }
+
   onMount(() => {
+    let destroyed = false;
+
     function resize() {
-      const dpr = window.devicePixelRatio || 1;
-      canvasEl.width = window.innerWidth * dpr;
-      canvasEl.height = window.innerHeight * dpr;
-      canvasEl.style.width = `${window.innerWidth}px`;
-      canvasEl.style.height = `${window.innerHeight}px`;
+      if (!app) return;
+      app.renderer.resize(window.innerWidth, window.innerHeight);
       render();
     }
-    resize();
     window.addEventListener('resize', resize);
 
-    // Async load runs in background — onMount cleanup must be sync to avoid leaking listener.
-    loadCanvas();
+    // Chain pixi init → initial canvas fetch → first paint.
+    (async () => {
+      try {
+        await initPixi();
+        if (destroyed) { app?.destroy(false, { children: true, texture: true, textureSource: true }); return; }
+        await loadCanvas();
+        if (destroyed) return;
+        render();
+      } catch (err) {
+        console.error('Renderer init failed:', err);
+        loadError = err.message || String(err);
+      }
+    })();
 
-    return () => window.removeEventListener('resize', resize);
+    return () => {
+      destroyed = true;
+      window.removeEventListener('resize', resize);
+      // `removeView: false` so Svelte keeps managing the <canvas> element.
+      app?.destroy(false, { children: true, texture: true, textureSource: true });
+      app = null;
+      worldContainer = null;
+      mainSprite = null;
+      mainTexture = null;
+      overlaySprite = null;
+    };
   });
 </script>
 
