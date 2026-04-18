@@ -69,6 +69,7 @@ For hobby traffic (< few hundred users/day), free tiers are sufficient. Upstash 
 ## Troubleshooting
 
 - **Canvas loads empty**: Check Upstash credentials in secrets
-- **Pixels don't persist**: Verify BITFIELD support — test with `redis-cli BITFIELD canvas SET u5 #0 1`
+- **Pixels don't persist**: Verify BITFIELD support — test with `redis-cli BITFIELD rplace:canvas:v2 SET u8 #0 42`
+- **Old 32-color canvas still visible after deploy**: the canvas key is versioned (`rplace:canvas:v2`). The old `rplace:canvas` key is orphaned — run `redis-cli DEL rplace:canvas` once to reclaim memory.
 - **WebSocket not connecting**: Ensure Durable Object migration ran (check `wrangler.json` migrations)
 - **Rate limiting not working**: Verify `SET key value NX EX 1` returns `"OK"` / `null` as expected on your Upstash tier

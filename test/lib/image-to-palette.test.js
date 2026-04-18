@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { rgbaToPalette, nearestColorIndex, paletteToRgba, DITHER_METHODS } from '../../src/lib/image-to-palette.js';
 import { ERROR_DIFFUSION_KERNELS } from '../../src/lib/dither-kernels.js';
+import { COLORS_RGBA } from '../../src/lib/constants.js';
+
+// Palette indices anchored to the new 256-color palette layout:
+//   0..15 = grayscale ramp (0 = pure black, 15 = pure white)
+const PALETTE_BLACK = 0;
+const PALETTE_WHITE = 15;
 
 function solidRgba(w, h, r, g, b, a = 255) {
   const out = new Uint8ClampedArray(w * h * 4);
@@ -12,10 +18,12 @@ function solidRgba(w, h, r, g, b, a = 255) {
 
 describe('rgbaToPalette', () => {
   it('nearest (default / method=none) picks exact palette hits', () => {
-    // #ff4500 is palette index 2. Feed that exact color.
-    const src = solidRgba(2, 2, 0xff, 0x45, 0x00);
+    // Pick an actual palette entry from the new palette and feed it back.
+    const probeIdx = 120;
+    const [r, g, b] = COLORS_RGBA[probeIdx];
+    const src = solidRgba(2, 2, r, g, b);
     const idx = rgbaToPalette(src, 2, 2);
-    expect([...idx]).toEqual([2, 2, 2, 2]);
+    expect([...idx]).toEqual([probeIdx, probeIdx, probeIdx, probeIdx]);
   });
 
   it('transparent pixels become -1', () => {
@@ -42,10 +50,10 @@ describe('rgbaToPalette', () => {
     for (const method of DITHER_METHODS) {
       const idx = rgbaToPalette(src, w, h, { method });
       expect(idx.length).toBe(w * h);
-      // Every index must be valid palette (0..31) since all pixels are opaque.
+      // Every index must be a valid opaque palette entry since all source pixels are opaque.
       for (let i = 0; i < idx.length; i++) {
         expect(idx[i]).toBeGreaterThanOrEqual(0);
-        expect(idx[i]).toBeLessThan(32);
+        expect(idx[i]).toBeLessThan(256);
       }
     }
   });
@@ -65,10 +73,10 @@ describe('rgbaToPalette', () => {
 
   it('on a solid-color image, dither produces the same single color everywhere', () => {
     // Feeding one exact palette color means zero error → all methods converge.
-    const src = solidRgba(4, 4, 0x00, 0x00, 0x00); // palette 27 (#000000)
+    const src = solidRgba(4, 4, 0, 0, 0); // pure black = palette index 0
     for (const method of ['floyd', 'atkinson', 'jarvis', 'burkes', 'sierra', 'sierra-lite']) {
       const idx = rgbaToPalette(src, 4, 4, { method });
-      expect([...idx].every((v) => v === 27)).toBe(true);
+      expect([...idx].every((v) => v === PALETTE_BLACK)).toBe(true);
     }
   });
 
@@ -105,14 +113,14 @@ describe('rgbaToPalette skip-white / paint-transparent', () => {
     expect(idx[1]).toBe(-1);
   });
 
-  it('paintTransparent maps transparent pixels to palette white (31)', () => {
+  it('paintTransparent maps transparent pixels to palette white', () => {
     const src = new Uint8ClampedArray([
       100, 100, 100, 10,  // transparent
       255, 255, 255, 255, // white
     ]);
     const idx = rgbaToPalette(src, 2, 1, { paintTransparent: true });
-    expect(idx[0]).toBe(31); // ffffff
-    expect(idx[1]).toBe(31);
+    expect(idx[0]).toBe(PALETTE_WHITE);
+    expect(idx[1]).toBe(PALETTE_WHITE);
   });
 
   it('paintTransparent + skipWhite: transparent pixels end up skipped', () => {
@@ -124,22 +132,23 @@ describe('rgbaToPalette skip-white / paint-transparent', () => {
 
 describe('nearestColorIndex', () => {
   it('exact palette match returns that index', () => {
-    // Palette 0 is #6d001a → (0x6d, 0x00, 0x1a)
-    expect(nearestColorIndex(0x6d, 0x00, 0x1a)).toBe(0);
+    const probe = 77;
+    const [r, g, b] = COLORS_RGBA[probe];
+    expect(nearestColorIndex(r, g, b)).toBe(probe);
   });
-  it('pure white maps to palette 31 (#ffffff)', () => {
-    expect(nearestColorIndex(255, 255, 255)).toBe(31);
+  it('pure white maps to the grayscale-white palette entry', () => {
+    expect(nearestColorIndex(255, 255, 255)).toBe(PALETTE_WHITE);
   });
-  it('pure black maps to palette 27 (#000000)', () => {
-    expect(nearestColorIndex(0, 0, 0)).toBe(27);
+  it('pure black maps to the grayscale-black palette entry', () => {
+    expect(nearestColorIndex(0, 0, 0)).toBe(PALETTE_BLACK);
   });
 });
 
 describe('paletteToRgba', () => {
   it('valid indices map to their palette RGB', () => {
-    const rgba = paletteToRgba([27, 31], 2, 1);
-    expect([rgba[0], rgba[1], rgba[2]]).toEqual([0, 0, 0]);        // black
-    expect([rgba[4], rgba[5], rgba[6]]).toEqual([255, 255, 255]);  // white
+    const rgba = paletteToRgba([PALETTE_BLACK, PALETTE_WHITE], 2, 1);
+    expect([rgba[0], rgba[1], rgba[2]]).toEqual([0, 0, 0]);
+    expect([rgba[4], rgba[5], rgba[6]]).toEqual([255, 255, 255]);
   });
   it('-1 renders as a checkerboard cell, alpha 255', () => {
     const rgba = paletteToRgba([-1], 1, 1);

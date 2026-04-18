@@ -4,7 +4,7 @@ A collaborative pixel art canvas inspired by [Reddit's r/place](https://www.redd
 
 ## Features
 
-- **2048x2048 canvas** with 32-color palette (from [rplace.live](https://rplace.live/))
+- **4096×4096 canvas** with a 256-color palette (16-step grayscale + 240-hue HSL wheel)
 - **Real-time updates** via WebSocket (Cloudflare Durable Objects)
 - **Batch pixel placement** up to 2048 pixels per request
 - **Rate limit** — 1 request per second per user (batch size independent)
@@ -26,7 +26,7 @@ A collaborative pixel art canvas inspired by [Reddit's r/place](https://www.redd
 
 ```
 Browser (Svelte SPA + WebSocket)
-  |  GET  /api/canvas  → full canvas binary (2.5MB raw)
+  |  GET  /api/canvas  → full canvas binary (16MB raw, ~5MB gzip)
   |  POST /api/place   → batch pixel placement
   |  WS   /api/ws      → Durable Object broadcast room
   v
@@ -36,7 +36,7 @@ Cloudflare Worker (Hono)
   └── Durable Object (WebSocket broadcast to all clients)
         ↕
 Upstash Redis
-  ├── BITFIELD "canvas" (5-bit per pixel, 2048x2048 = 2.62MB)
+  ├── STRING "canvas:v2" (1 byte per pixel, 4096×4096 = 16 MB)
   └── STRING "cooldown:{userId}" (1s TTL, blocks repeat requests)
 ```
 
@@ -93,7 +93,7 @@ src/
 │   ├── constants.js                   # Config, palette, limits (shared)
 │   ├── redis-client.js                # Upstash Redis factory
 │   ├── canvas-storage.js              # BITFIELD read/write
-│   ├── canvas-decoder.js              # 5-bit → RGBA (client-side)
+│   ├── canvas-decoder.js              # Raw bytes → RGBA (client-side; u8 = identity indices)
 │   ├── rate-limiter.js                # SET NX EX cooldown
 │   ├── image-uploader.js              # Browser-side batched uploader
 │   └── get-user-id.js                 # IP-based identity
@@ -103,7 +103,7 @@ src/
 │   ├── app.css                        # Global styles
 │   └── components/
 │       ├── CanvasRenderer.svelte      # Canvas + zoom/pan + touch
-│       ├── ColorPicker.svelte         # 32-color palette grid
+│       ├── ColorPicker.svelte         # Favorites strip + 256-color grid + custom picker
 │       ├── CanvasControls.svelte      # Zoom buttons + coordinates
 │       ├── DrawToolbar.svelte         # Paint / submit / undo / redo
 │       └── ImageImporter.svelte       # Image-to-canvas uploader
@@ -114,7 +114,7 @@ src/
 
 ### `GET /api/canvas`
 
-Returns the full canvas as raw binary (5-bit packed, ~2.5MB).
+Returns the full canvas as raw binary (1 byte per pixel, 16 MB — Cloudflare gzips it on the edge).
 
 ### `POST /api/place`
 
@@ -149,9 +149,10 @@ Key constants in `src/lib/constants.js`:
 
 | Constant | Default | Description |
 |---|---|---|
-| `CANVAS_WIDTH` | 2048 | Canvas width in pixels |
-| `CANVAS_HEIGHT` | 2048 | Canvas height in pixels |
-| `MAX_COLORS` | 32 | Number of colors in palette |
+| `CANVAS_WIDTH` | 4096 | Canvas width in pixels |
+| `CANVAS_HEIGHT` | 4096 | Canvas height in pixels |
+| `MAX_COLORS` | 256 | Number of palette entries |
+| `BITS_PER_PIXEL` | 8 | Byte-aligned (storage = W × H bytes) |
 | `MAX_BATCH_SIZE` | 2048 | Max pixels per placement request |
 | `REQUEST_COOLDOWN_SEC` | 1 | Minimum seconds between requests per user |
 
@@ -167,7 +168,7 @@ Key constants in `src/lib/constants.js`:
 - [redis-place by mehdiamrane](https://github.com/mehdiamrane/redis-place)
 - [redis-challenge by alfredosalzillo](https://github.com/alfredosalzillo/redis-challenge)
 - [place by dynastic](https://github.com/dynastic/place)
-- [rplace.live](https://rplace.live/) — color palette reference
+- [rplace.live](https://rplace.live/) — original 32-color palette reference (since superseded by our 256-color HSL wheel)
 
 ## License
 

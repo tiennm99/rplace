@@ -1,8 +1,8 @@
 import { redisRaw, redisRawBinary } from './redis-client.js';
-import { CANVAS_WIDTH, TOTAL_PIXELS, BITS_PER_PIXEL, REDIS_CANVAS_KEY } from './constants.js';
+import { CANVAS_WIDTH, TOTAL_PIXELS, REDIS_CANVAS_KEY } from './constants.js';
 
-/** Total bytes needed for the canvas bitfield */
-const CANVAS_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
+/** Total bytes needed for the canvas — 1 byte per pixel (u8 palette index). */
+const CANVAS_BYTES = TOTAL_PIXELS;
 
 /**
  * Get the full canvas as a Uint8Array of raw bytes.
@@ -37,6 +37,7 @@ export async function getFullCanvas(env) {
 /**
  * Set multiple pixels in a single atomic BITFIELD command.
  * Uses raw REST API — SDK bitfield builder is broken in @upstash/redis 1.x.
+ * With u8, BITFIELD offsets are byte-aligned (`#N` = byte N).
  * @param {object} env
  * @param {Array<{x: number, y: number, color: number}>} pixels
  */
@@ -46,7 +47,7 @@ export async function setPixels(env, pixels) {
   const command = ['BITFIELD', REDIS_CANVAS_KEY];
   for (const { x, y, color } of pixels) {
     const offset = y * CANVAS_WIDTH + x;
-    command.push('SET', 'u5', `#${offset}`, String(color));
+    command.push('SET', 'u8', `#${offset}`, String(color));
   }
   await redisRaw(env, command);
 }
