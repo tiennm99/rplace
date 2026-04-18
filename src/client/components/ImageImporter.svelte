@@ -1,10 +1,8 @@
 <script>
   import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_BATCH_SIZE, REQUEST_COOLDOWN_SEC } from '../../lib/constants.js';
-  import { rgbaToPalette, paletteToRgba, DITHER_METHODS } from '../../lib/image-to-palette.js';
-  import { resizeRgba } from '../../lib/image-resize.js';
-  import { transformRgba } from '../../lib/image-transform.js';
-  import { applyColorCorrection } from '../../lib/image-color-correction.js';
+  import { DITHER_METHODS } from '../../lib/image-to-palette.js';
   import { createImageUploader } from '../../lib/image-uploader.js';
+  import { createPipelineClient } from '../../lib/image-pipeline-client.js';
   import { onMount } from 'svelte';
   import {
     rgbaToDataUrl, dataUrlToRgba,
@@ -16,15 +14,22 @@
   // True while THIS panel requested a pick and is still waiting for the result.
   let picking = $state(false);
 
-  // Source image (decoded, palette-mapped)
+  // Source image (decoded, held on main thread for save/restore only)
   let fileName = $state(null);
   let srcWidth = $state(0);
   let srcHeight = $state(0);
   /** @type {Uint8ClampedArray|null} */
   let srcRgba = $state(null);
-  /** @type {Int16Array|null} */
-  let paletteIndices = $state(null);
+
+  // Latest full-resolution quantized result. Used by overlay, buildPixels,
+  // save-job, and validation. Quick-tier results do NOT overwrite this.
+  /** @type {null | {indices: Int16Array, width: number, height: number, preview: ArrayBuffer}} */
+  let paletteResult = $state(null);
   let opaqueCount = $state(0);
+
+  // Latest preview buffer (from quick *or* full) for the 120×120 panel only.
+  /** @type {null | {buffer: ArrayBuffer, width: number, height: number}} */
+  let previewBuffer = $state(null);
 
   // Preview canvas
   let previewEl = $state();
@@ -77,7 +82,27 @@
   // to skip pixels that were already placed before a refresh.
   let jobStartPlaced = 0;
 
+  // Worker-backed pipeline. Lives for the component's lifetime.
+  /** @type {ReturnType<typeof createPipelineClient>|null} */
+  let client = null;
+
+  // Drag-tier timers:
+  //   quick: throttled (max one in-flight per QUICK_INTERVAL) while inputs churn,
+  //          runs the pipeline at <= QUICK_MAX_DIM to feed the 120×120 preview panel.
+  //   full:  debounced; fires once after inputs settle, updates the overlay + paletteResult.
+  const QUICK_INTERVAL = 60;
+  const FULL_DEBOUNCE = 180;
+  const QUICK_MAX_DIM = 384;
+  let quickScheduled = false;
+  let lastQuickAt = 0;
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let fullTimer = null;
+
   onMount(() => {
+    client = createPipelineClient();
+    client.onResult(handleWorkerResult);
+    client.onError((m) => { errorText = m.error || 'Pipeline error.'; });
+
     const j = loadJob();
     if (j && j.total > 0 && j.placed < j.total) {
       resumable = {
@@ -86,7 +111,71 @@
         startedAt: j.startedAt || 0,
       };
     }
+
+    return () => {
+      client?.dispose();
+      client = null;
+      if (fullTimer) clearTimeout(fullTimer);
+    };
   });
+
+  function handleWorkerResult(m) {
+    const indices = new Int16Array(m.indices);
+    if (m.quick) {
+      // Panel only — do not disturb overlay/buildPixels state.
+      previewBuffer = { buffer: m.preview, width: m.width, height: m.height };
+      return;
+    }
+    // Full tier: update everything.
+    let count = 0;
+    for (let i = 0; i < indices.length; i++) if (indices[i] >= 0) count++;
+    opaqueCount = count;
+    paletteResult = { indices, width: m.width, height: m.height, preview: m.preview };
+    previewBuffer = { buffer: m.preview, width: m.width, height: m.height };
+  }
+
+  function quickDims(w, h) {
+    const m = Math.max(w, h);
+    if (m <= QUICK_MAX_DIM) return { w, h };
+    const r = QUICK_MAX_DIM / m;
+    return { w: Math.max(1, Math.round(w * r)), h: Math.max(1, Math.round(h * r)) };
+  }
+
+  function buildParams(resizeW_, resizeH_) {
+    return {
+      flipH, flipV, rotation,
+      resizeW: resizeW_, resizeH: resizeH_, resampleMethod,
+      brightness, contrast, saturation, gamma,
+      ditherMethod, skipWhite, whiteThreshold, paintTransparent,
+    };
+  }
+
+  function scheduleQuick() {
+    if (!client || !srcRgba || resizeW <= 0 || resizeH <= 0) return;
+    if (quickScheduled) return;
+    const now = Date.now();
+    const delay = Math.max(0, QUICK_INTERVAL - (now - lastQuickAt));
+    quickScheduled = true;
+    setTimeout(() => {
+      quickScheduled = false;
+      lastQuickAt = Date.now();
+      if (!client || !srcRgba || resizeW <= 0 || resizeH <= 0) return;
+      const { w, h } = quickDims(resizeW, resizeH);
+      // If already ≤ quick cap, skip — the full tier will cover it without aliasing.
+      if (w === resizeW && h === resizeH) return;
+      client.run(buildParams(w, h), { quick: true });
+    }, delay);
+  }
+
+  function scheduleFull() {
+    if (!client || !srcRgba || resizeW <= 0 || resizeH <= 0) return;
+    if (fullTimer) clearTimeout(fullTimer);
+    fullTimer = setTimeout(() => {
+      fullTimer = null;
+      if (!client || !srcRgba || resizeW <= 0 || resizeH <= 0) return;
+      client.run(buildParams(resizeW, resizeH), { quick: false });
+    }, FULL_DEBOUNCE);
+  }
 
   /** Snapshot the current pipeline inputs into a job record (minus placed/total which are added later). */
   function buildJobRecord() {
@@ -136,11 +225,12 @@
       return;
     }
 
-    // Restore source + config — the reactive pipeline will regenerate paletteIndices.
+    // Restore source + config — the reactive pipeline will regenerate paletteResult.
     fileName = j.fileName ?? null;
     srcRgba = decoded.rgba;
     srcWidth = decoded.width;
     srcHeight = decoded.height;
+    client?.setSource(decoded.rgba, decoded.width, decoded.height);
     originX = j.originX ?? 0;
     originY = j.originY ?? 0;
     resizeW = j.resizeW ?? decoded.width;
@@ -199,50 +289,44 @@
       const ratio = Math.min(maxW / w, maxH / h, 1);
       resizeW = Math.max(1, Math.floor(w * ratio));
       resizeH = Math.max(1, Math.floor(h * ratio));
-      // paletteIndices recomputed reactively via $effect below.
+      client?.setSource(data, w, h);
+      // paletteResult recomputed reactively via $effect below.
     } catch (err) {
       errorText = `Failed to load image: ${err.message || err}`;
       srcRgba = null;
-      paletteIndices = null;
+      paletteResult = null;
+      previewBuffer = null;
       srcWidth = srcHeight = 0;
     }
   }
 
-  // Re-run pipeline when any relevant input changes.
-  // Order: transform → resize → palette.
+  // Trigger the worker pipeline whenever any relevant input changes.
+  // The worker holds per-stage caches, so a single-slider drag only
+  // recomputes the stages downstream of the change.
   $effect(() => {
     if (!srcRgba || resizeW <= 0 || resizeH <= 0) {
-      paletteIndices = null; opaqueCount = 0; return;
+      paletteResult = null; previewBuffer = null; opaqueCount = 0;
+      if (fullTimer) { clearTimeout(fullTimer); fullTimer = null; }
+      return;
     }
-    const transformed = (flipH || flipV || rotation !== 0)
-      ? transformRgba(srcRgba, srcWidth, srcHeight, { flipH, flipV, rotation })
-      : { rgba: srcRgba, width: srcWidth, height: srcHeight };
-    const resized = (resizeW === transformed.width && resizeH === transformed.height)
-      ? transformed.rgba
-      : resizeRgba(transformed.rgba, transformed.width, transformed.height, resizeW, resizeH, resampleMethod);
-    const corrected = (brightness !== 0 || contrast !== 0 || saturation !== 0 || gamma !== 1)
-      ? applyColorCorrection(resized, resizeW, resizeH, { brightness, contrast, saturation, gamma })
-      : resized;
-    const idx = rgbaToPalette(corrected, resizeW, resizeH, {
-      method: ditherMethod,
-      skipWhite, whiteThreshold,
-      paintTransparent,
-    });
-    paletteIndices = idx;
-    let count = 0;
-    for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) count++;
-    opaqueCount = count;
-    renderPreview();
+    // Register reactive deps explicitly.
+    void flipH; void flipV; void rotation;
+    void resizeW; void resizeH; void resampleMethod;
+    void brightness; void contrast; void saturation; void gamma;
+    void ditherMethod; void skipWhite; void whiteThreshold; void paintTransparent;
+    scheduleQuick();
+    scheduleFull();
   });
 
-  function renderPreview() {
-    if (!previewEl || !paletteIndices) return;
-    const rgba = paletteToRgba(paletteIndices, resizeW, resizeH);
-    previewEl.width = resizeW;
-    previewEl.height = resizeH;
+  // Paint the latest preview buffer (quick or full) into the panel canvas.
+  $effect(() => {
+    if (!open || !previewEl || !previewBuffer) return;
+    const { buffer, width, height } = previewBuffer;
+    previewEl.width = width;
+    previewEl.height = height;
     const ctx = previewEl.getContext('2d');
-    ctx.putImageData(new ImageData(rgba, resizeW, resizeH), 0, 0);
-  }
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(buffer), width, height), 0, 0);
+  });
 
   function onResizeWInput(e) {
     const v = parseInt(e.target.value, 10);
@@ -297,17 +381,16 @@
     gamma = 1;
   }
 
-  $effect(() => { if (open && paletteIndices) renderPreview(); });
-
   // Push overlay state to the canvas renderer whenever its inputs change.
-  // Clears on close, missing image, or toggle off.
+  // The overlay always uses the latest *full-tier* result (paletteResult),
+  // so quick-tier previews never flash the canvas with low-res pixels.
   $effect(() => {
     if (!setOverlay) return;
-    if (open && showOverlay && paletteIndices && resizeW > 0 && resizeH > 0) {
+    if (open && showOverlay && paletteResult) {
       setOverlay({
         x: originX, y: originY,
-        width: resizeW, height: resizeH,
-        indices: paletteIndices,
+        width: paletteResult.width, height: paletteResult.height,
+        indices: paletteResult.indices,
         alpha: overlayAlpha,
       });
     } else {
@@ -331,10 +414,11 @@
   }
 
   function validatePlacement() {
-    if (!paletteIndices) return 'No image loaded.';
+    if (!paletteResult) return 'No image loaded, or still processing…';
+    const { width, height } = paletteResult;
     if (!Number.isInteger(originX) || !Number.isInteger(originY)) return 'X and Y must be integers.';
     if (originX < 0 || originY < 0) return 'X and Y must be ≥ 0.';
-    if (originX + resizeW > CANVAS_WIDTH || originY + resizeH > CANVAS_HEIGHT) {
+    if (originX + width > CANVAS_WIDTH || originY + height > CANVAS_HEIGHT) {
       return `Image would overflow canvas (${CANVAS_WIDTH}x${CANVAS_HEIGHT}).`;
     }
     return null;
@@ -342,11 +426,13 @@
 
   function buildPixels() {
     const pixels = [];
-    for (let i = 0; i < paletteIndices.length; i++) {
-      const color = paletteIndices[i];
+    if (!paletteResult) return pixels;
+    const { indices, width } = paletteResult;
+    for (let i = 0; i < indices.length; i++) {
+      const color = indices[i];
       if (color < 0) continue;
-      const lx = i % resizeW;
-      const ly = (i / resizeW) | 0;
+      const lx = i % width;
+      const ly = (i / width) | 0;
       const x = originX + lx;
       const y = originY + ly;
       if (skipMatching && getCommittedColor?.(x, y) === color) continue;
@@ -449,7 +535,7 @@
       {#if fileName}<span class="file-name" title={fileName}>{fileName}</span>{/if}
     </div>
 
-    {#if paletteIndices}
+    {#if srcRgba}
       <div class="preview-row">
         <div class="preview-wrap">
           <canvas bind:this={previewEl} class="preview"></canvas>
@@ -589,7 +675,7 @@
 
       <div class="controls">
         {#if status === 'idle' || status === 'done' || status === 'error'}
-          <button class="primary" onclick={start} disabled={!paletteIndices}>Start</button>
+          <button class="primary" onclick={start} disabled={!paletteResult}>Start</button>
           {#if status !== 'idle'}<button onclick={reset}>Reset</button>{/if}
         {:else if status === 'running'}
           <button onclick={pause}>Pause</button>
