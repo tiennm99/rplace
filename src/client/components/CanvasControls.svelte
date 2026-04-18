@@ -1,7 +1,15 @@
 <script>
   import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../../lib/constants.js';
 
-  let { zoom, onZoomIn, onZoomOut, onResetZoom, onGoto, cursorPos } = $props();
+  let { zoom, onZoomIn, onZoomOut, onResetZoom, onGoto, cursorPos,
+        wsState = 'connecting', onHelp } = $props();
+
+  const wsLabel = $derived({
+    open: 'Live',
+    connecting: 'Connecting…',
+    reconnecting: 'Reconnecting…',
+    closed: 'Offline',
+  }[wsState] ?? wsState);
 
   let zoomLabel = $derived(
     zoom >= 1 ? `${zoom}x` : `1/${1 / zoom}x`
@@ -24,6 +32,7 @@
 </script>
 
 <div class="controls">
+  <span class="ws {wsState}" title={wsLabel} aria-label="Connection: {wsLabel}"></span>
   <div class="zoom">
     <button onclick={onZoomOut} title="Zoom out (E)">−</button>
     <span class="level">{zoomLabel}</span>
@@ -43,6 +52,7 @@
     />
     <button type="submit" title="Jump to coordinates (Enter)">go</button>
   </form>
+  <button class="help" onclick={onHelp} title="Keyboard shortcuts (?)" aria-label="Show keyboard shortcuts">?</button>
 </div>
 
 <style>
@@ -123,4 +133,32 @@
     cursor: pointer;
   }
   .goto button:hover { background: #555; }
+
+  .ws {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #666;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
+    flex-shrink: 0;
+  }
+  .ws.open { background: #22c55e; }
+  .ws.connecting, .ws.reconnecting { background: #eab308; animation: pulse 1.2s infinite; }
+  .ws.closed { background: #ef4444; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+
+  .help {
+    width: 28px; height: 28px;
+    border: 1px solid #555;
+    border-radius: 50%;
+    background: #333;
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .help:hover { background: #555; }
 </style>

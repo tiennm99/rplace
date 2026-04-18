@@ -6,7 +6,7 @@
   import { paletteToRgba } from '../../lib/image-to-palette.js';
 
   let { selectedColor, zoom, onZoomChange, onCursorMove, mode, onBufferChange, onBufferFull,
-        pickActive = false, onPick } = $props();
+        pickActive = false, onPick, onEyedrop } = $props();
 
   let canvasEl;
   let imageData = null;
@@ -229,6 +229,10 @@
       // In pick mode a left-click-without-drag picks a target; we skip stroking
       // here and defer to mouseUp (so the user can still left-drag to pan).
       if (pickActive) return;
+      // Alt+click always samples the committed color, regardless of mode.
+      // In 'eyedrop' mode, plain click does the same — sampling happens on
+      // mouseUp-without-drag so the user can still left-drag to pan.
+      if (e.altKey || mode === 'eyedrop') return;
       if (mode === 'draw') {
         const pos = screenToCanvas(e.clientX, e.clientY);
         addToStroke(pos.x, pos.y);
@@ -246,7 +250,7 @@
     });
 
     if (e.buttons & 1) {
-      if (!pickActive && mode === 'draw') {
+      if (!pickActive && !e.altKey && mode === 'draw') {
         addToStroke(pos.x, pos.y);
       } else {
         const dx = e.clientX - lastMouse.x;
@@ -276,6 +280,12 @@
           const cy = Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1));
           onPick?.({ x: cx, y: cy });
         }
+      } else if (!dragging && (e.altKey || mode === 'eyedrop')) {
+        const pos = screenToCanvas(e.clientX, e.clientY);
+        const cx = Math.max(0, Math.min(pos.x, CANVAS_WIDTH - 1));
+        const cy = Math.max(0, Math.min(pos.y, CANVAS_HEIGHT - 1));
+        const idx = getCommittedColor(cx, cy);
+        if (idx >= 0) onEyedrop?.(idx);
       } else if (mode === 'draw') {
         finishStroke();
       } else if (!dragging) {
@@ -456,7 +466,7 @@
     ontouchstart={handleTouchStart}
     ontouchmove={handleTouchMove}
     ontouchend={handleTouchEnd}
-    style="cursor: {mode === 'draw' ? 'crosshair' : dragging ? 'grabbing' : 'crosshair'}; touch-action: none"
+    style="cursor: {dragging ? 'grabbing' : mode === 'eyedrop' ? 'copy' : 'crosshair'}; touch-action: none"
   ></canvas>
 </div>
 

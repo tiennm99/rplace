@@ -12,6 +12,9 @@
       title="Paint mode: click to place pixel">Paint</button>
     <button class:active={mode === 'draw'} onclick={() => onModeChange('draw')}
       title="Draw mode: drag to draw, right-drag to pan">Draw</button>
+    <button class:active={mode === 'eyedrop'} onclick={() => onModeChange('eyedrop')}
+      title="Eyedropper: click a pixel to sample its color (shortcut: I, or Alt+click in any mode)"
+      aria-label="Eyedropper">🎯</button>
   </div>
 
   <div class="sep"></div>

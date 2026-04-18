@@ -5,6 +5,7 @@
   import CanvasControls from './components/CanvasControls.svelte';
   import DrawToolbar from './components/DrawToolbar.svelte';
   import ImageImporter from './components/ImageImporter.svelte';
+  import HelpOverlay from './components/HelpOverlay.svelte';
 
   let selectedColor = $state(0);
   let cursorPos = $state({ x: 0, y: 0 });
@@ -15,6 +16,19 @@
   let toast = $state(null); // { kind: 'error'|'info', text: string }
   let toastTimer = null;
   let importerOpen = $state(false);
+  let helpOpen = $state(false);
+
+  // First-visit hint. Dismissed on first successful commit or explicit X.
+  // Storage key is versioned so rewriting the copy re-shows the hint.
+  const HINT_STORAGE_KEY = 'rplace:hint:v1';
+  let hintVisible = $state(
+    typeof localStorage !== 'undefined' && localStorage.getItem(HINT_STORAGE_KEY) !== '1',
+  );
+  function dismissHint() {
+    if (!hintVisible) return;
+    hintVisible = false;
+    try { localStorage.setItem(HINT_STORAGE_KEY, '1'); } catch { /* storage unavailable */ }
+  }
 
   // Pick-target handoff — ImageImporter calls requestPick() to register handlers;
   // a click on the canvas fires .pick(pos); Esc fires .cancel().
@@ -60,9 +74,18 @@
     p?.cancel();
   }
 
-  // WebSocket connection with auto-reconnect + exponential backoff
+  function handleEyedrop(colorIndex) {
+    selectedColor = colorIndex;
+    // If the user is in dedicated eyedrop mode, snap back to paint after one pick.
+    // Alt+click in other modes leaves the mode alone.
+    if (mode === 'eyedrop') mode = 'paint';
+  }
+
+  // WebSocket connection with auto-reconnect + exponential backoff.
+  // wsState drives the connection indicator dot in CanvasControls.
   let wsRetryDelay = 1000;
   let isReconnect = false;
+  let wsState = $state('connecting'); // 'connecting' | 'open' | 'reconnecting' | 'closed'
 
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -84,8 +107,10 @@
       }
       wsRetryDelay = 1000;
       isReconnect = true;
+      wsState = 'open';
     };
     ws.onclose = () => {
+      wsState = 'reconnecting';
       setTimeout(connectWebSocket, wsRetryDelay);
       wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
     };
@@ -119,7 +144,8 @@
 
     switch (e.key) {
       case 'Escape':
-        if (activePick) { e.preventDefault(); cancelActivePick(); }
+        if (helpOpen) { e.preventDefault(); helpOpen = false; }
+        else if (activePick) { e.preventDefault(); cancelActivePick(); }
         else canvasRenderer?.cancelStrokeIfAny?.();
         return;
       case 'q': case 'Q':
@@ -138,6 +164,14 @@
         e.preventDefault(); canvasRenderer?.panBy(PAN_STEP, 0); return;
       case 'd': case 'D':
         e.preventDefault(); canvasRenderer?.panBy(-PAN_STEP, 0); return;
+      case 'i': case 'I':
+        e.preventDefault();
+        mode = mode === 'eyedrop' ? 'paint' : 'eyedrop';
+        return;
+      case '?': case '/':
+        e.preventDefault();
+        helpOpen = !helpOpen;
+        return;
     }
   }
 
@@ -182,6 +216,7 @@
         canvasRenderer.commitPending();
         cooldownUntil = Date.now() + REQUEST_COOLDOWN_SEC * 1000;
         nowTick = Date.now();
+        dismissHint();
         showToast('info', 'Submitted', 1500);
       } else {
         showToast('error', `Unexpected response: ${data?.error || 'no data'}`);
@@ -208,6 +243,7 @@
     {mode}
     pickActive={!!activePick}
     onPick={handleCanvasPick}
+    onEyedrop={handleEyedrop}
     onZoomChange={(z) => zoom = z}
     onCursorMove={(pos) => cursorPos = pos}
     onBufferChange={(s) => bufferState = s}
@@ -220,6 +256,8 @@
     onResetZoom={() => zoom = 1}
     onGoto={(x, y) => canvasRenderer?.gotoPoint(x, y)}
     {cursorPos}
+    {wsState}
+    onHelp={() => helpOpen = true}
   />
   <DrawToolbar
     {mode}
@@ -257,9 +295,21 @@
     </div>
   {/if}
 
+  {#if hintVisible && !activePick}
+    <div class="hint" role="status" aria-live="polite">
+      <span class="hint-text">
+        Pick a color, click the canvas to paint, then <strong>Submit</strong> to send.
+        Wheel/<kbd>Q</kbd><kbd>E</kbd> to zoom, drag or <kbd>WASD</kbd> to pan, <kbd>?</kbd> for help.
+      </span>
+      <button class="hint-close" onclick={dismissHint} aria-label="Dismiss hint">✕</button>
+    </div>
+  {/if}
+
   {#if toast}
     <div class="toast {toast.kind}" role="status" aria-live="polite">{toast.text}</div>
   {/if}
+
+  <HelpOverlay open={helpOpen} onClose={() => helpOpen = false} />
 </main>
 
 <style>
@@ -315,4 +365,52 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   }
   .import-btn:hover { background: #1d4ed8; }
+
+  .hint {
+    position: fixed;
+    bottom: 260px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(640px, calc(100vw - 32px));
+    padding: 8px 10px 8px 14px;
+    background: rgba(17, 24, 39, 0.95);
+    border: 1px solid #374151;
+    border-radius: 10px;
+    color: #e5e7eb;
+    font-size: 0.85rem;
+    z-index: 12;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(6px);
+  }
+  .hint-text { line-height: 1.4; }
+  .hint kbd {
+    display: inline-block;
+    padding: 0 6px;
+    margin: 0 2px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: #f3f4f6;
+    background: #111827;
+    border: 1px solid #374151;
+    border-bottom-width: 2px;
+    border-radius: 3px;
+  }
+  .hint-close {
+    background: transparent;
+    border: 0;
+    color: #9ca3af;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .hint-close:hover { color: #fff; }
+
+  @media (max-width: 600px) {
+    .hint { bottom: 240px; font-size: 0.8rem; }
+  }
 </style>
