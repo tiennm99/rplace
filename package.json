@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@upstash/redis": "^1.34.3",
-    "hono": "^4.7.6",
+    "hono": "^4.12.16",
     "pixi.js": "^8.18.1"
   },
   "devDependencies": {
