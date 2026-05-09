@@ -18,6 +18,12 @@ export const MAX_BATCH_SIZE = 2048;
 export const CHUNK_BYTES = 65536;
 export const CHUNK_COUNT = Math.ceil(TOTAL_PIXELS / CHUNK_BYTES);
 
+// CF DO SQLite has a per-cell BLOB cap (~2 MB at compat date 2025-04-01).
+// Fail-fast at module load if a future bump would overflow.
+if (CHUNK_BYTES > 2_000_000) {
+  throw new Error(`CHUNK_BYTES (${CHUNK_BYTES}) exceeds DO SQLite per-cell BLOB cap (~2 MB)`);
+}
+
 
 /**
  * Build the 256-color palette deterministically:

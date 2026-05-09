@@ -1,4 +1,4 @@
-import { CANVAS_WIDTH, TOTAL_PIXELS, CHUNK_BYTES } from '../../lib/constants.js';
+import { CANVAS_WIDTH, TOTAL_PIXELS, CHUNK_BYTES, CHUNK_COUNT } from '../../lib/constants.js';
 
 /**
  * Canvas pixel storage as fixed-size BLOB chunks in DO SQLite.
@@ -42,23 +42,36 @@ export function readChunk(sql, chunkId) {
 /**
  * Read all chunks concatenated into a single TOTAL_PIXELS-sized buffer.
  * Used to serve GET /api/canvas.
+ *
+ * Bounded by chunk_id < CHUNK_COUNT so orphan rows left after a canvas-shrink
+ * don't trip a RangeError on out.set(...).
  */
 export function readAllChunks(sql) {
   const out = new Uint8Array(TOTAL_PIXELS);
-  const cursor = sql.exec('SELECT chunk_id, bytes FROM canvas_chunks');
+  const cursor = sql.exec(
+    'SELECT chunk_id, bytes FROM canvas_chunks WHERE chunk_id < ?',
+    CHUNK_COUNT,
+  );
   for (const row of cursor) {
     const chunkId = row.chunk_id;
     const blob = row.bytes;
     const view = blob instanceof Uint8Array ? blob : new Uint8Array(blob);
-    out.set(view, chunkId * CHUNK_BYTES);
+    // Defensive clamp: if a row's persisted blob is longer than this chunk's
+    // expected size (e.g. legacy data), trim before copying.
+    const expected = chunkSize(chunkId);
+    const trimmed = view.length > expected ? view.subarray(0, expected) : view;
+    out.set(trimmed, chunkId * CHUNK_BYTES);
   }
   return out;
 }
 
 /**
  * Apply a batch of pixel writes. Groups by chunk so each touched chunk
- * incurs at most one read and one write. Single transaction so the batch
- * is atomic across all touched chunks.
+ * incurs at most one read and one write.
+ *
+ * Atomicity: each sql.exec auto-commits, so this function is NOT atomic on
+ * its own. The caller must wrap the call in state.storage.transactionSync
+ * (or transaction) to make a multi-chunk batch all-or-nothing.
  *
  * @param {SqlStorage} sql
  * @param {Array<{x:number, y:number, color:number}>} pixels
@@ -79,17 +92,13 @@ export function writePixels(sql, pixels) {
     bucket.push({ byteOffset, color: p.color });
   }
 
-  // For each touched chunk: read current bytes (or zero-fill), apply edits,
-  // write back. INSERT OR REPLACE upserts the row.
-  // Atomicity: this loop is fully synchronous (no `await`) and the DO is
-  // single-threaded, so the chunk updates are atomic with respect to other
-  // requests. If anyone adds an `await` inside this loop, wrap the whole
-  // block in `state.storage.transactionSync(() => { ... })` to preserve it.
   for (const [chunkId, edits] of groups) {
     const buf = readChunk(sql, chunkId);
-    // readChunk returns a fresh Uint8Array (or wraps a buffer); writes must
-    // not alias persisted state, so copy to be safe.
-    const next = new Uint8Array(buf);
+    // Allocate against chunkSize, never the persisted blob's length: after a
+    // canvas grow, the old short blob would silently drop OOB writes.
+    const expected = chunkSize(chunkId);
+    const next = new Uint8Array(expected);
+    next.set(buf.subarray(0, Math.min(buf.length, expected)));
     for (const { byteOffset, color } of edits) {
       next[byteOffset] = color;
     }

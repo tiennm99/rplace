@@ -1,7 +1,7 @@
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from '../lib/constants.js';
 import { init as initSchema } from './lib/schema.js';
 import { readAllChunks, writePixels } from './lib/chunk-storage.js';
-import { tryAcquire } from './lib/cooldown-store.js';
+import { tryAcquire, release } from './lib/cooldown-store.js';
 
 /**
  * CanvasRoom: single Durable Object that owns
@@ -76,10 +76,20 @@ export class CanvasRoom {
     }
 
     try {
-      writePixels(this.sql, pixels);
+      // transactionSync makes the multi-chunk batch all-or-nothing. Without
+      // it, each sql.exec auto-commits and a partial failure leaves the
+      // canvas in a half-written state.
+      this.state.storage.transactionSync(() => {
+        writePixels(this.sql, pixels);
+      });
     } catch (err) {
       console.error('writePixels failed:', err);
-      return Response.json({ error: 'storage_failed', message: String(err) }, { status: 500 });
+      // Refund the cooldown so a transient storage error doesn't lock the
+      // user out for 1s (and the image-uploader doesn't lose throughput).
+      try { release(this.sql, userId); } catch (releaseErr) {
+        console.warn('cooldown release failed:', releaseErr?.message || releaseErr);
+      }
+      return Response.json({ error: 'storage_failed' }, { status: 500 });
     }
 
     this.#broadcastPixels(pixels);
@@ -116,8 +126,10 @@ export class CanvasRoom {
     if (!wasClean) {
       console.warn(`WS unclean close: code=${code} reason=${reason || '<none>'}`);
     }
-    // Required pre-2026-04-07 compat date; harmless after.
-    ws.close(code, reason);
+    // Required because compatibility_date 2025-04-01 predates the
+    // 2026-04-07 default-close cutoff. Remove if/when wrangler.json
+    // bumps past that date. The try/catch handles already-closed sockets.
+    try { ws.close(code, reason); } catch { /* already closed */ }
   }
 
   webSocketError(ws, error) {

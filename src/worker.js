@@ -21,7 +21,13 @@ app.get('/api/canvas', async (c) => {
 
 /** POST /api/place — validate at the edge, forward to the DO. */
 app.post('/api/place', async (c) => {
-  const contentLength = parseInt(c.req.header('content-length') || '0', 10);
+  // Require a positive Content-Length. Missing or zero would otherwise let a
+  // chunked-transfer-encoded body bypass the MAX_BODY_BYTES pre-parse cap.
+  const contentLengthRaw = c.req.header('content-length');
+  const contentLength = parseInt(contentLengthRaw ?? '', 10);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return c.json({ error: 'content_length_required' }, 411);
+  }
   if (contentLength > MAX_BODY_BYTES) {
     return c.json({ error: 'body_too_large', max: MAX_BODY_BYTES }, 413);
   }

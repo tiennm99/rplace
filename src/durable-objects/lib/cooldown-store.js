@@ -42,11 +42,13 @@ export function tryAcquire(sql, userId, now = Date.now()) {
   // No expired row to update. Either the user has never been seen (insert
   // succeeds) or they hold an active claim (insert fails on PK conflict).
   try {
-    sql.exec(
+    const insertCursor = sql.exec(
       'INSERT INTO cooldowns (user_id, expires_at) VALUES (?, ?)',
       userId,
       expiresAt,
     );
+    // Drain symmetrically with the UPDATE branch so statement effects commit.
+    insertCursor.toArray();
     if (Math.random() < GC_SAMPLE_RATE) {
       try { gc(sql, now); } catch { /* GC is best-effort */ }
     }
@@ -54,6 +56,14 @@ export function tryAcquire(sql, userId, now = Date.now()) {
   } catch {
     return { allowed: false, retryAfter: REQUEST_COOLDOWN_SEC };
   }
+}
+
+/**
+ * Refund a cooldown row so a transient write failure doesn't soft-DOS the
+ * user for 1s. Called from the catch path in placePixels.
+ */
+export function release(sql, userId) {
+  sql.exec('DELETE FROM cooldowns WHERE user_id = ?', userId).toArray();
 }
 
 /** Delete all expired cooldown rows. Cheap with the expires_at index. */

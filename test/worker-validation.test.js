@@ -10,12 +10,18 @@ vi.mock('../src/durable-objects/canvas-room.js', () => ({
 
 import app from '../src/worker.js';
 
-/** Helper to create POST request */
+/** Helper to create POST request. Computes Content-Length explicitly because
+ *  the synthetic Request constructor in this environment doesn't auto-set it. */
 function postPlace(body) {
+  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+  const bodyBytes = new TextEncoder().encode(bodyStr).byteLength;
   return new Request('http://localhost/api/place', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: typeof body === 'string' ? body : JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': String(bodyBytes),
+    },
+    body: bodyStr,
   });
 }
 
@@ -35,12 +41,45 @@ describe('POST /api/place validation', () => {
   it('rejects invalid JSON', async () => {
     const req = new Request('http://localhost/api/place', {
       method: 'POST',
+      headers: { 'Content-Length': '8' },
       body: 'not json',
     });
     const res = await app.fetch(req, env);
     expect(res.status).toBe(400);
     const data = await res.json();
     expect(data.error).toBe('invalid_json');
+  });
+
+  it('rejects POST without Content-Length', async () => {
+    const req = new Request('http://localhost/api/place', {
+      method: 'POST',
+      body: '{"pixels":[]}',
+    });
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(411);
+    expect((await res.json()).error).toBe('content_length_required');
+  });
+
+  it('rejects POST with zero Content-Length', async () => {
+    const req = new Request('http://localhost/api/place', {
+      method: 'POST',
+      headers: { 'Content-Length': '0' },
+      body: '',
+    });
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(411);
+    expect((await res.json()).error).toBe('content_length_required');
+  });
+
+  it('rejects POST with Content-Length above the cap', async () => {
+    const req = new Request('http://localhost/api/place', {
+      method: 'POST',
+      headers: { 'Content-Length': String(MAX_BATCH_SIZE * 64 + 1) },
+      body: '{}',
+    });
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe('body_too_large');
   });
 
   it('rejects missing pixels array', async () => {
