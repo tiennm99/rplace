@@ -1,20 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from '../src/lib/constants.js';
 
-// Mock all external dependencies before importing worker
-vi.mock('../src/lib/canvas-storage.js', () => ({
-  getFullCanvas: vi.fn(() => Promise.resolve(new Uint8Array(10))),
-  setPixels: vi.fn(() => Promise.resolve()),
-}));
-vi.mock('../src/lib/rate-limiter.js', () => ({
-  checkRateLimit: vi.fn(() => Promise.resolve({ allowed: true, retryAfter: 0 })),
-}));
+// Worker validation runs at the edge before forwarding to the DO; we don't
+// need the real DO for these tests, just a stub that returns whatever response
+// the test wants to simulate.
 vi.mock('../src/durable-objects/canvas-room.js', () => ({
   CanvasRoom: class {},
 }));
 
 import app from '../src/worker.js';
-import { checkRateLimit } from '../src/lib/rate-limiter.js';
 
 /** Helper to create POST request */
 function postPlace(body) {
@@ -25,13 +19,13 @@ function postPlace(body) {
   });
 }
 
-/** Minimal env mock with Durable Object stub */
+/** Configurable DO stub. Tests that exercise edge-validation never reach the
+ *  DO; tests that pass validation get this canned response. */
+let doResponse = () => Response.json({ ok: true });
 const env = {
   CANVAS_ROOM: {
     idFromName: () => 'room-id',
-    get: () => ({
-      fetch: () => Promise.resolve(new Response('ok')),
-    }),
+    get: () => ({ fetch: () => Promise.resolve(doResponse()) }),
   },
 };
 
@@ -124,8 +118,8 @@ describe('POST /api/place validation', () => {
     expect((await res.json()).error).toBe('invalid_pixel');
   });
 
-  it('returns 429 when rate limited', async () => {
-    checkRateLimit.mockResolvedValue({ allowed: false, retryAfter: 1 });
+  it('forwards rate-limit response from DO unchanged', async () => {
+    doResponse = () => Response.json({ error: 'rate_limited', retryAfter: 1 }, { status: 429 });
     const res = await app.fetch(postPlace({ pixels: [{ x: 0, y: 0, color: 0 }] }), env);
     expect(res.status).toBe(429);
     const data = await res.json();
@@ -133,16 +127,15 @@ describe('POST /api/place validation', () => {
     expect(data.retryAfter).toBe(1);
   });
 
-  it('accepts valid pixel placement', async () => {
-    checkRateLimit.mockResolvedValue({ allowed: true, retryAfter: 0 });
+  it('forwards 200 OK from DO on valid placement', async () => {
+    doResponse = () => Response.json({ ok: true });
     const res = await app.fetch(postPlace({ pixels: [{ x: 0, y: 0, color: 0 }] }), env);
     expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.ok).toBe(true);
+    expect((await res.json()).ok).toBe(true);
   });
 
   it('accepts boundary pixel values', async () => {
-    checkRateLimit.mockResolvedValue({ allowed: true, retryAfter: 0 });
+    doResponse = () => Response.json({ ok: true });
     const res = await app.fetch(postPlace({
       pixels: [{ x: CANVAS_WIDTH - 1, y: CANVAS_HEIGHT - 1, color: MAX_COLORS - 1 }],
     }), env);

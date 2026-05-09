@@ -3,7 +3,7 @@ export const CANVAS_WIDTH = 4096;
 export const CANVAS_HEIGHT = 4096;
 export const TOTAL_PIXELS = CANVAS_WIDTH * CANVAS_HEIGHT;
 
-/** 1 byte per pixel, 256 palette entries — the raw Redis bytes are directly
+/** 1 byte per pixel, 256 palette entries — the raw bytes are directly
  *  the pixel indices, no bit-level decode. */
 export const MAX_COLORS = 256;
 
@@ -11,9 +11,16 @@ export const MAX_COLORS = 256;
 export const REQUEST_COOLDOWN_SEC = 1;
 export const MAX_BATCH_SIZE = 2048;
 
-/** Redis keys. Key is versioned (":v2") so the old 32-color / 2048² canvas
- *  key (`rplace:canvas`) is ignored after this rollout — old data stays in
- *  Redis harmlessly until an operator deletes it. */
+/** Canvas chunked storage layout (DO SQLite). 64 KB chunks → 256 chunks for
+ *  the 16 MB / 4096² canvas. CHUNK_COUNT is derived: bumping CANVAS_WIDTH or
+ *  CANVAS_HEIGHT and redeploying transparently allocates more chunks (lazy-
+ *  initialized to zero on first read). */
+export const CHUNK_BYTES = 65536;
+export const CHUNK_COUNT = Math.ceil(TOTAL_PIXELS / CHUNK_BYTES);
+
+/** Legacy Upstash keys — used by the one-shot migration endpoint only.
+ *  Removed after migration verification (see Phase 4 of the canvas-on-do
+ *  storage plan). */
 export const REDIS_KEY_PREFIX = 'rplace:';
 export const REDIS_CANVAS_KEY = `${REDIS_KEY_PREFIX}canvas:v2`;
 

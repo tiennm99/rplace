@@ -1,8 +1,7 @@
 import { Hono } from 'hono';
-import { getFullCanvas, setPixels } from './lib/canvas-storage.js';
 import { getUserId } from './lib/get-user-id.js';
-import { checkRateLimit } from './lib/rate-limiter.js';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from './lib/constants.js';
+import { migrateFromUpstash } from './admin/migrate-from-upstash.js';
 
 export { CanvasRoom } from './durable-objects/canvas-room.js';
 
@@ -11,26 +10,17 @@ const app = new Hono();
 // ~64 bytes is generous per pixel JSON object {"x":2047,"y":2047,"color":31}
 const MAX_BODY_BYTES = MAX_BATCH_SIZE * 64;
 
-/** GET /api/canvas — full canvas as binary.
- * Cloudflare's edge auto-compresses compressible content; we don't set
- * Content-Encoding manually (caused double-encoding / undecoded blobs
- * through wrangler dev + vite proxy during testing). */
+/** Resolve the singleton CanvasRoom DO stub. */
+function room(env) {
+  return env.CANVAS_ROOM.get(env.CANVAS_ROOM.idFromName('main'));
+}
+
+/** GET /api/canvas — full canvas binary, served by the DO directly. */
 app.get('/api/canvas', async (c) => {
-  try {
-    const buffer = await getFullCanvas(c.env);
-    return new Response(buffer, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Cache-Control': 'public, max-age=10, s-maxage=10, stale-while-revalidate=30',
-      },
-    });
-  } catch (err) {
-    console.error('Canvas read failed:', err);
-    return c.json({ error: 'canvas_read_failed', message: String(err) }, 500);
-  }
+  return room(c.env).fetch('http://do/canvas');
 });
 
-/** POST /api/place — batch pixel placement */
+/** POST /api/place — validate at the edge, forward to the DO. */
 app.post('/api/place', async (c) => {
   const contentLength = parseInt(c.req.header('content-length') || '0', 10);
   if (contentLength > MAX_BODY_BYTES) {
@@ -51,78 +41,48 @@ app.post('/api/place', async (c) => {
   if (pixels.length > MAX_BATCH_SIZE) {
     return c.json({ error: 'batch_too_large', max: MAX_BATCH_SIZE }, 400);
   }
-
-  // Validate each pixel
   for (const p of pixels) {
     if (
-      typeof p.x !== 'number' || typeof p.y !== 'number' ||
-      typeof p.color !== 'number' ||
+      !Number.isInteger(p?.x) || !Number.isInteger(p?.y) || !Number.isInteger(p?.color) ||
       p.x < 0 || p.x >= CANVAS_WIDTH ||
       p.y < 0 || p.y >= CANVAS_HEIGHT ||
-      p.color < 0 || p.color >= MAX_COLORS ||
-      !Number.isInteger(p.x) || !Number.isInteger(p.y) ||
-      !Number.isInteger(p.color)
+      p.color < 0 || p.color >= MAX_COLORS
     ) {
       return c.json({ error: 'invalid_pixel', pixel: p }, 400);
     }
   }
 
-  // Rate limiting — 1 request per second per user, regardless of batch size.
   const userId = await getUserId(c.req.raw);
-  const { allowed, retryAfter } = await checkRateLimit(c.env, userId);
-  if (!allowed) {
-    return c.json({ error: 'rate_limited', retryAfter }, 429);
-  }
 
-  // Persist pixels (must succeed before broadcast)
-  try {
-    await setPixels(c.env, pixels);
-  } catch (err) {
-    console.error('Redis write failed:', err);
-    return c.json({ error: 'storage_failed', message: String(err) }, 500);
-  }
-
-  // Broadcast in background — don't block the user response on DO fetch.
-  // In non-CF runtimes (tests), executionCtx is unavailable; fall back to fire-and-forget.
-  const broadcastTask = broadcastPixels(c.env, pixels);
-  let ctx = null;
-  try { ctx = c.executionCtx; } catch { /* no-op */ }
-  if (ctx) {
-    ctx.waitUntil(broadcastTask);
-  } else {
-    broadcastTask.catch((err) => console.error('Broadcast:', err));
-  }
-
-  return c.json({ ok: true });
+  // DO does cooldown check + pixel write + broadcast in one atomic step.
+  return room(c.env).fetch('http://do/place', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, pixels }),
+  });
 });
 
-async function broadcastPixels(env, pixels) {
-  try {
-    const roomId = env.CANVAS_ROOM.idFromName('main');
-    const room = env.CANVAS_ROOM.get(roomId);
-    const r = await room.fetch(new Request('http://internal/broadcast', {
-      method: 'POST',
-      body: JSON.stringify(pixels),
-    }));
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      console.error('Broadcast non-OK:', r.status, text);
-    }
-  } catch (err) {
-    console.error('Broadcast threw:', err);
-  }
-}
-
-/** WebSocket upgrade — delegate to Durable Object */
+/** GET /api/ws — WebSocket upgrade routed to the DO. */
 app.get('/api/ws', async (c) => {
   const upgradeHeader = c.req.header('Upgrade');
   if (upgradeHeader !== 'websocket') {
     return c.text('Expected WebSocket', 426);
   }
+  return room(c.env).fetch(c.req.raw);
+});
 
-  const roomId = c.env.CANVAS_ROOM.idFromName('main');
-  const room = c.env.CANVAS_ROOM.get(roomId);
-  return room.fetch(c.req.raw);
+/**
+ * POST /admin/migrate-from-upstash — one-shot Upstash → DO canvas import.
+ * Token-gated; deleted in Phase 4 of the canvas-on-do storage plan.
+ */
+app.post('/admin/migrate-from-upstash', async (c) => {
+  const auth = c.req.header('Authorization') || '';
+  const expected = `Bearer ${c.env.MIGRATION_TOKEN || ''}`;
+  if (!c.env.MIGRATION_TOKEN || auth !== expected) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const force = c.req.query('force') === '1';
+  return migrateFromUpstash(c.env, room(c.env), { force });
 });
 
 export default app;

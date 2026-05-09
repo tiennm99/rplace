@@ -1,47 +1,145 @@
+import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE, TOTAL_PIXELS } from '../lib/constants.js';
+import { init as initSchema } from './lib/schema.js';
+import { readAllChunks, writePixels, importFullCanvas } from './lib/chunk-storage.js';
+import { tryAcquire } from './lib/cooldown-store.js';
+
 /**
- * Durable Object for WebSocket broadcast room.
- * Uses Hibernation API so connections survive DO eviction.
+ * CanvasRoom: single Durable Object that owns
+ *  - canvas pixel state (SQLite chunk_blob rows)
+ *  - per-user rate-limit cooldowns (SQLite TTL rows)
+ *  - the WebSocket broadcast hub (Hibernation API)
+ *
+ * The Worker is a thin proxy that validates input and forwards to one of
+ * the four internal endpoints below.
  */
 export class CanvasRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.sql = state.storage.sql;
+    initSchema(this.sql);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
+    switch (url.pathname) {
+      case '/canvas':  return this.#handleGetCanvas();
+      case '/place':   return this.#handlePlace(request);
+      case '/import':  return this.#handleImport(request);
+      case '/ws':      return this.#handleWsUpgrade();
+      default:         return new Response('not found', { status: 404 });
+    }
+  }
 
-    // Internal broadcast from worker
-    if (url.pathname === '/broadcast' && request.method === 'POST') {
-      const pixels = await request.json();
-      const message = JSON.stringify({ type: 'pixels', pixels });
-      for (const ws of this.state.getWebSockets()) {
-        try {
-          ws.send(message);
-        } catch (err) {
-          console.warn('WS send failed, closing socket:', err?.message || err);
-          ws.close(1011, 'send failed');
-        }
-      }
-      return new Response('ok');
+  #handleGetCanvas() {
+    const buffer = readAllChunks(this.sql);
+    return new Response(buffer, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': 'public, max-age=10, s-maxage=10, stale-while-revalidate=30',
+      },
+    });
+  }
+
+  async #handlePlace(request) {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json({ error: 'invalid_json' }, { status: 400 });
     }
 
-    // WebSocket upgrade
+    const { userId, pixels } = body || {};
+    if (typeof userId !== 'string' || !userId) {
+      return Response.json({ error: 'invalid_user' }, { status: 400 });
+    }
+    if (!Array.isArray(pixels) || pixels.length === 0) {
+      return Response.json({ error: 'pixels_required' }, { status: 400 });
+    }
+    if (pixels.length > MAX_BATCH_SIZE) {
+      return Response.json({ error: 'batch_too_large', max: MAX_BATCH_SIZE }, { status: 400 });
+    }
+    for (const p of pixels) {
+      if (
+        !Number.isInteger(p?.x) || !Number.isInteger(p?.y) || !Number.isInteger(p?.color) ||
+        p.x < 0 || p.x >= CANVAS_WIDTH ||
+        p.y < 0 || p.y >= CANVAS_HEIGHT ||
+        p.color < 0 || p.color >= MAX_COLORS
+      ) {
+        return Response.json({ error: 'invalid_pixel', pixel: p }, { status: 400 });
+      }
+    }
+
+    // Rate-limit then write+broadcast atomically (DO single-threaded).
+    const { allowed, retryAfter } = tryAcquire(this.sql, userId);
+    if (!allowed) {
+      return Response.json({ error: 'rate_limited', retryAfter }, { status: 429 });
+    }
+
+    try {
+      writePixels(this.sql, pixels);
+    } catch (err) {
+      console.error('writePixels failed:', err);
+      return Response.json({ error: 'storage_failed', message: String(err) }, { status: 500 });
+    }
+
+    this.#broadcastPixels(pixels);
+    return Response.json({ ok: true });
+  }
+
+  /**
+   * One-shot Upstash → DO migration target. Body is the full raw canvas
+   * (TOTAL_PIXELS bytes). Token-gated by the worker; this DO endpoint is
+   * not internet-reachable except via that gate.
+   */
+  async #handleImport(request) {
+    const url = new URL(request.url);
+    const force = url.searchParams.get('force') === '1';
+    const buf = new Uint8Array(await request.arrayBuffer());
+    if (buf.length !== TOTAL_PIXELS) {
+      return Response.json(
+        { error: 'size_mismatch', expected: TOTAL_PIXELS, got: buf.length },
+        { status: 400 },
+      );
+    }
+    let result;
+    try {
+      result = importFullCanvas(this.sql, buf, force);
+    } catch (err) {
+      return Response.json({ error: 'import_failed', message: String(err) }, { status: 500 });
+    }
+    if (result.skipped) {
+      return Response.json({ error: 'already_populated', hint: 'pass ?force=1 to overwrite' }, { status: 409 });
+    }
+    return Response.json({ ok: true, chunks_written: result.imported });
+  }
+
+  #handleWsUpgrade() {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-
     this.state.acceptWebSocket(server);
-
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Called when a WebSocket receives a message (required by Hibernation API).
-   * Clients aren't expected to send anything in this protocol; close defensively. */
+  #broadcastPixels(pixels) {
+    const message = JSON.stringify({ type: 'pixels', pixels });
+    for (const ws of this.state.getWebSockets()) {
+      try {
+        ws.send(message);
+      } catch (err) {
+        console.warn('WS send failed, closing socket:', err?.message || err);
+        try { ws.close(1011, 'send failed'); } catch { /* already closed */ }
+      }
+    }
+  }
+
+  /** Hibernation-API callbacks. */
+
   webSocketMessage(ws) {
+    // Protocol is broadcast-only; reject any inbound payload.
     ws.close(1003, 'unexpected client message');
   }
 
-  /** Called when a WebSocket is closed. */
   webSocketClose(ws, code, reason, wasClean) {
     if (!wasClean) {
       console.warn(`WS unclean close: code=${code} reason=${reason || '<none>'}`);
@@ -50,7 +148,6 @@ export class CanvasRoom {
     ws.close(code, reason);
   }
 
-  /** Called on WebSocket error. */
   webSocketError(ws, error) {
     console.error('WS error:', error?.message || error);
     ws.close(1011, 'error');
