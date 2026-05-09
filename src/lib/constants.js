@@ -18,11 +18,6 @@ export const MAX_BATCH_SIZE = 2048;
 export const CHUNK_BYTES = 65536;
 export const CHUNK_COUNT = Math.ceil(TOTAL_PIXELS / CHUNK_BYTES);
 
-/** Legacy Upstash keys — used by the one-shot migration endpoint only.
- *  Removed after migration verification (see Phase 4 of the canvas-on-do
- *  storage plan). */
-export const REDIS_KEY_PREFIX = 'rplace:';
-export const REDIS_CANVAS_KEY = `${REDIS_KEY_PREFIX}canvas:v2`;
 
 /**
  * Build the 256-color palette deterministically:

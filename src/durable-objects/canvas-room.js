@@ -1,6 +1,6 @@
-import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE, TOTAL_PIXELS } from '../lib/constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from '../lib/constants.js';
 import { init as initSchema } from './lib/schema.js';
-import { readAllChunks, writePixels, importFullCanvas } from './lib/chunk-storage.js';
+import { readAllChunks, writePixels } from './lib/chunk-storage.js';
 import { tryAcquire } from './lib/cooldown-store.js';
 
 /**
@@ -23,11 +23,10 @@ export class CanvasRoom {
   async fetch(request) {
     const url = new URL(request.url);
     switch (url.pathname) {
-      case '/canvas':  return this.#handleGetCanvas();
-      case '/place':   return this.#handlePlace(request);
-      case '/import':  return this.#handleImport(request);
-      case '/ws':      return this.#handleWsUpgrade();
-      default:         return new Response('not found', { status: 404 });
+      case '/canvas': return this.#handleGetCanvas();
+      case '/place':  return this.#handlePlace(request);
+      case '/ws':     return this.#handleWsUpgrade();
+      default:        return new Response('not found', { status: 404 });
     }
   }
 
@@ -85,33 +84,6 @@ export class CanvasRoom {
 
     this.#broadcastPixels(pixels);
     return Response.json({ ok: true });
-  }
-
-  /**
-   * One-shot Upstash → DO migration target. Body is the full raw canvas
-   * (TOTAL_PIXELS bytes). Token-gated by the worker; this DO endpoint is
-   * not internet-reachable except via that gate.
-   */
-  async #handleImport(request) {
-    const url = new URL(request.url);
-    const force = url.searchParams.get('force') === '1';
-    const buf = new Uint8Array(await request.arrayBuffer());
-    if (buf.length !== TOTAL_PIXELS) {
-      return Response.json(
-        { error: 'size_mismatch', expected: TOTAL_PIXELS, got: buf.length },
-        { status: 400 },
-      );
-    }
-    let result;
-    try {
-      result = importFullCanvas(this.sql, buf, force);
-    } catch (err) {
-      return Response.json({ error: 'import_failed', message: String(err) }, { status: 500 });
-    }
-    if (result.skipped) {
-      return Response.json({ error: 'already_populated', hint: 'pass ?force=1 to overwrite' }, { status: 409 });
-    }
-    return Response.json({ ok: true, chunks_written: result.imported });
   }
 
   #handleWsUpgrade() {

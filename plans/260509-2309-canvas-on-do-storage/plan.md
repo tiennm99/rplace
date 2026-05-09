@@ -9,6 +9,10 @@ brainstorm: ../reports/brainstorm-260509-2309-canvas-on-do-storage.md
 researchReports:
   - ../reports/researcher-260509-2255-forever-free-hosting.md
   - ../reports/researcher-260509-2246-vercel-migration-feasibility.md
+deployment:
+  productionUrl: https://rplace.miti99.workers.dev
+  migratedAt: 2026-05-10
+  postCleanupVersionId: 34cd1900-dd16-47f1-abae-8d195b076b0a
 ---
 
 # Plan: Migrate canvas storage from Upstash → Durable Object SQLite
@@ -42,12 +46,13 @@ Constants drive resize: `CHUNK_COUNT = ceil(CANVAS_WIDTH * CANVAS_HEIGHT / CHUNK
 |---|---|---|---|
 | 1 | [Storage Foundation](phase-01-storage-foundation.md) | completed | ~3h |
 | 2 | [DO Integration & Worker Proxy](phase-02-do-integration-worker-proxy.md) | completed | ~4h |
-| 3 | [One-Shot Upstash Migration](phase-03-one-shot-upstash-migration.md) | code-complete (awaits production run) | ~2h |
-| 4 | [Cleanup & Dependency Removal](phase-04-cleanup-dependency-removal.md) | blocked (waits for Phase 3 prod migration + 7d) | ~2h |
-| 5 | [Deploy & Documentation](phase-05-deploy-documentation.md) | partial (resize doc done; deploy + README await Phase 4) | ~1h |
+| 3 | [One-Shot Upstash Migration](phase-03-one-shot-upstash-migration.md) | completed | ~2h |
+| 4 | [Cleanup & Dependency Removal](phase-04-cleanup-dependency-removal.md) | completed | ~2h |
+| 5 | [Deploy & Documentation](phase-05-deploy-documentation.md) | partial (deploy done, READMEs done, 7-day observation pending) | ~1h |
 
 **Total estimate:** ~12h (1.5 working days)
-**Status:** Phases 1, 2, 3 (code) and 5 (resize doc) complete. Phase 3 prod run + Phase 4 cleanup are user-gated.
+**Status:** Phases 1–4 complete. Phase 5 done except 7-day post-deploy observation window.
+**Production:** https://rplace.miti99.workers.dev — version 34cd1900, Upstash fully removed.
 
 ## Dependencies
 

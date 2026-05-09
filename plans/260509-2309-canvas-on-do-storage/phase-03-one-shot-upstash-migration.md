@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "One-Shot Upstash Migration"
-status: code-complete
+status: completed
 priority: P2
 effort: "2h"
 dependencies: [2]

@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { getUserId } from './lib/get-user-id.js';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from './lib/constants.js';
-import { migrateFromUpstash } from './admin/migrate-from-upstash.js';
 
 export { CanvasRoom } from './durable-objects/canvas-room.js';
 
@@ -71,20 +70,6 @@ app.get('/api/ws', async (c) => {
     return c.text('Expected WebSocket', 426);
   }
   return room(c.env).fetch('http://do/ws', c.req.raw);
-});
-
-/**
- * POST /admin/migrate-from-upstash — one-shot Upstash → DO canvas import.
- * Token-gated; deleted in Phase 4 of the canvas-on-do storage plan.
- */
-app.post('/admin/migrate-from-upstash', async (c) => {
-  const auth = c.req.header('Authorization') || '';
-  const expected = `Bearer ${c.env.MIGRATION_TOKEN || ''}`;
-  if (!c.env.MIGRATION_TOKEN || auth !== expected) {
-    return c.json({ error: 'forbidden' }, 403);
-  }
-  const force = c.req.query('force') === '1';
-  return migrateFromUpstash(c.env, room(c.env), { force });
 });
 
 export default app;

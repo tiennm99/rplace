@@ -1,4 +1,4 @@
-import { CANVAS_WIDTH, TOTAL_PIXELS, CHUNK_BYTES, CHUNK_COUNT } from '../../lib/constants.js';
+import { CANVAS_WIDTH, TOTAL_PIXELS, CHUNK_BYTES } from '../../lib/constants.js';
 
 /**
  * Canvas pixel storage as fixed-size BLOB chunks in DO SQLite.
@@ -102,35 +102,3 @@ export function writePixels(sql, pixels) {
   }
 }
 
-/**
- * Bulk replace the entire canvas. Used by the one-shot Upstash migration.
- * Refuses to run if the canvas already has data, unless `force` is true.
- *
- * @param {SqlStorage} sql
- * @param {Uint8Array} fullCanvas - exactly TOTAL_PIXELS bytes
- * @param {boolean} force - overwrite even if rows already exist
- * @returns {{imported: number, skipped: boolean}}
- */
-export function importFullCanvas(sql, fullCanvas, force = false) {
-  if (fullCanvas.length !== TOTAL_PIXELS) {
-    throw new Error(`expected ${TOTAL_PIXELS} bytes, got ${fullCanvas.length}`);
-  }
-  if (!force) {
-    const existing = sql.exec('SELECT COUNT(*) AS n FROM canvas_chunks').one().n;
-    if (existing > 0) {
-      return { imported: 0, skipped: true };
-    }
-  }
-  for (let chunkId = 0; chunkId < CHUNK_COUNT; chunkId++) {
-    const start = chunkId * CHUNK_BYTES;
-    const end = Math.min(start + CHUNK_BYTES, TOTAL_PIXELS);
-    const slice = fullCanvas.slice(start, end);
-    sql.exec(
-      'INSERT INTO canvas_chunks (chunk_id, bytes) VALUES (?, ?) ' +
-        'ON CONFLICT(chunk_id) DO UPDATE SET bytes = excluded.bytes',
-      chunkId,
-      slice,
-    );
-  }
-  return { imported: CHUNK_COUNT, skipped: false };
-}
