@@ -12,7 +12,7 @@
     "test:watch": "vitest --config vitest.config.js"
   },
   "dependencies": {
-    "hono": "^4.7.6",
+    "hono": "^4.12.18",
     "pixi.js": "^8.18.1"
   },
   "devDependencies": {
