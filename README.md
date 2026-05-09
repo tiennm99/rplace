@@ -18,60 +18,54 @@ A collaborative pixel art canvas inspired by [Reddit's r/place](https://www.redd
 |---|---|
 | Frontend | [Svelte 5](https://svelte.dev/) (runes) + HTML5 Canvas |
 | Backend | [Hono](https://hono.dev/) on Cloudflare Workers |
-| Real-time | WebSocket via Cloudflare Durable Objects |
-| Storage | [Upstash Redis](https://upstash.com/) (BITFIELD for canvas, SET NX EX for rate limiting) |
+| Real-time | WebSocket via Cloudflare Durable Objects (Hibernation API) |
+| Storage | Durable Object SQLite — chunked BLOB rows for canvas, TTL rows for cooldowns |
 | Build | [Vite](https://vite.dev/) |
 
 ## Architecture
 
 ```
 Browser (Svelte SPA + WebSocket)
-  |  GET  /api/canvas  → full canvas binary (16MB raw, ~5MB gzip)
-  |  POST /api/place   → batch pixel placement
-  |  WS   /api/ws      → Durable Object broadcast room
+  |  GET  /api/canvas   → full canvas binary (16 MB, edge-cached 10s)
+  |  POST /api/place    → batch pixel placement (validated at edge)
+  |  WS   /api/ws       → CanvasRoom Durable Object broadcast
   v
-Cloudflare Worker (Hono)
-  ├── Canvas API (read/write pixels via Redis BITFIELD)
-  ├── Rate Limiter (SET NX EX — atomic per-user cooldown)
-  └── Durable Object (WebSocket broadcast to all clients)
-        ↕
-Upstash Redis
-  ├── STRING "canvas:v2" (1 byte per pixel, 4096×4096 = 16 MB)
-  └── STRING "cooldown:{userId}" (1s TTL, blocks repeat requests)
+Cloudflare Worker (Hono — thin proxy)
+  └─▶ CanvasRoom Durable Object  (single instance, idFromName('main'))
+        ├── canvas_chunks   SQLite BLOB rows × 256 (64 KB each = 16 MB)
+        ├── cooldowns       SQLite TTL rows (1s rate-limit, lazy GC)
+        └── WebSocket hub   Hibernation API broadcasts pixel deltas
 ```
+
+`CHUNK_COUNT = ceil(CANVAS_WIDTH × CANVAS_HEIGHT / CHUNK_BYTES)` — bumping
+canvas dimensions in `src/lib/constants.js` and redeploying lazy-allocates new
+chunks on first read. See [`docs/canvas-resize-procedure.md`](docs/canvas-resize-procedure.md).
 
 ## Getting Started
 
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+
-- [Cloudflare account](https://dash.cloudflare.com/) (free tier works)
-- [Upstash Redis](https://console.upstash.com/) database (free tier works)
+- [Cloudflare account](https://dash.cloudflare.com/) (free tier works — Workers Free + DO SQLite Free)
 
 ### Setup
 
 ```bash
-# Clone and install
 git clone <repo-url>
 cd rplace
 npm install
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your Upstash Redis credentials
-
-# For wrangler (Cloudflare Workers CLI)
-npx wrangler secret put UPSTASH_REDIS_REST_URL
-npx wrangler secret put UPSTASH_REDIS_REST_TOKEN
 ```
+
+No external storage to configure. The canvas and rate-limit state live inside
+the Durable Object.
 
 ### Development
 
 ```bash
-# Run worker locally (serves both API and frontend)
+# Run worker locally (serves API + static frontend)
 npm run dev
 
-# Or run frontend and worker separately
+# Or split frontend + worker
 npm run dev:client   # Vite dev server on :5173 (proxies /api to :8787)
 npm run dev          # Wrangler dev server on :8787
 ```
@@ -86,15 +80,21 @@ npm run deploy   # Builds frontend + deploys worker to Cloudflare
 
 ```
 src/
-├── worker.js                          # Hono API entry point
+├── worker.js                          # Hono entry — thin proxy + edge validation
+├── admin/
+│   └── migrate-from-upstash.js        # One-shot Upstash → DO importer (token-gated)
 ├── durable-objects/
-│   └── canvas-room.js                 # WebSocket broadcast room
+│   ├── canvas-room.js                 # DO: storage + cooldown + WS hub
+│   └── lib/
+│       ├── schema.js                  # Idempotent CREATE TABLE
+│       ├── chunk-storage.js           # BLOB chunk read/write/import
+│       └── cooldown-store.js          # Rate-limit acquire + lazy GC
 ├── lib/
-│   ├── constants.js                   # Config, palette, limits (shared)
-│   ├── redis-client.js                # Upstash Redis factory
-│   ├── canvas-storage.js              # BITFIELD read/write
-│   ├── canvas-decoder.js              # Raw bytes → RGBA (client-side; u8 = identity indices)
-│   ├── rate-limiter.js                # SET NX EX cooldown
+│   ├── constants.js                   # CANVAS_WIDTH/HEIGHT, CHUNK_BYTES, palette
+│   ├── canvas-decoder.js              # Raw bytes → RGBA (client-side)
+│   ├── canvas-storage.js              # Legacy Upstash reader (used by migration only)
+│   ├── redis-client.js                # Legacy Upstash REST helpers (migration only)
+│   ├── rate-limiter.js                # Legacy Upstash cooldown (orphaned, awaits removal)
 │   ├── image-uploader.js              # Browser-side batched uploader
 │   └── get-user-id.js                 # IP-based identity
 ├── client/
@@ -103,7 +103,7 @@ src/
 │   ├── app.css                        # Global styles
 │   └── components/
 │       ├── CanvasRenderer.svelte      # Canvas + zoom/pan + touch
-│       ├── ColorPicker.svelte         # Favorites strip + 256-color grid + custom picker
+│       ├── ColorPicker.svelte         # Favorites + 256-color grid + custom picker
 │       ├── CanvasControls.svelte      # Zoom buttons + coordinates
 │       ├── DrawToolbar.svelte         # Paint / submit / undo / redo
 │       └── ImageImporter.svelte       # Image-to-canvas uploader
@@ -114,7 +114,7 @@ src/
 
 ### `GET /api/canvas`
 
-Returns the full canvas as raw binary (1 byte per pixel, 16 MB — Cloudflare gzips it on the edge).
+Returns the full canvas as raw binary (1 byte per pixel, 16 MB — Cloudflare gzips it on the edge). Cached for 10s at the edge.
 
 ### `POST /api/place`
 
@@ -143,6 +143,13 @@ WebSocket for real-time pixel updates. Messages are JSON:
 { "type": "pixels", "pixels": [{ "x": 100, "y": 200, "color": 27 }] }
 ```
 
+### `POST /admin/migrate-from-upstash` (transitional)
+
+Token-gated one-shot endpoint that pulls the canvas from a legacy Upstash
+Redis instance and imports it into the Durable Object. Slated for removal
+after the production migration completes (Phase 4 of
+[`plans/260509-2309-canvas-on-do-storage`](plans/260509-2309-canvas-on-do-storage)).
+
 ## Configuration
 
 Key constants in `src/lib/constants.js`:
@@ -152,22 +159,19 @@ Key constants in `src/lib/constants.js`:
 | `CANVAS_WIDTH` | 4096 | Canvas width in pixels |
 | `CANVAS_HEIGHT` | 4096 | Canvas height in pixels |
 | `MAX_COLORS` | 256 | Number of palette entries |
-| `BITS_PER_PIXEL` | 8 | Byte-aligned (storage = W × H bytes) |
 | `MAX_BATCH_SIZE` | 2048 | Max pixels per placement request |
 | `REQUEST_COOLDOWN_SEC` | 1 | Minimum seconds between requests per user |
+| `CHUNK_BYTES` | 65536 | Bytes per SQLite BLOB chunk (must stay ≤ 2 MB CF DO row cap) |
+| `CHUNK_COUNT` | derived | `ceil(TOTAL_PIXELS / CHUNK_BYTES)` — auto-recomputed on resize |
 
 ## Credits & References
 
 - [Reddit on Building & Scaling r/place (Fastly)](https://www.fastly.com/blog/reddit-on-building-scaling-rplace)
 - [Engineering Behind r/place (Sai Kumar Chintada)](https://saikumarchintada.medium.com/engineering-behind-r-place-a7eb53bcf5f1)
-- [Redis Place: Building r/place with 9 Redis Data Structures (Mehdi Amrane)](https://dev.to/mehdi/redis-place-building-rplace-with-9-redis-data-structures-3lj8)
-- [Redis Pixel War (Alfredo Salzillo)](https://dev.to/alfredosalzillo/redis-pixel-war-3i7a)
-- [Redis BITFIELD Command](https://redis.io/docs/latest/commands/bitfield/)
+- [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/)
+- [SQLite-backed Durable Object Storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [reddit-plugin-place-opensource](https://github.com/reddit-archive/reddit-plugin-place-opensource)
 - [rPlace by anthonytedja](https://github.com/anthonytedja/rPlace)
-- [redis-place by mehdiamrane](https://github.com/mehdiamrane/redis-place)
-- [redis-challenge by alfredosalzillo](https://github.com/alfredosalzillo/redis-challenge)
-- [place by dynastic](https://github.com/dynastic/place)
 - [rplace.live](https://rplace.live/) — original 32-color palette reference (since superseded by our 256-color HSL wheel)
 
 ## License

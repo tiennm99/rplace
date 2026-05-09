@@ -80,8 +80,8 @@ export async function migrateFromUpstash(env, roomStub, { force = false } = {}) 
 function pickSampleOffsets(srcBytes) {
   const offsets = new Set([
     0,                                               // (0, 0)
-    CANVAS_WIDTH - 1,                                // top-right
-    (CANVAS_WIDTH * CANVAS_WIDTH) - 1,               // bottom-right (square canvas)
+    CANVAS_WIDTH - 1,                                // first-row right edge
+    TOTAL_PIXELS - 1,                                // last byte
     Math.floor(TOTAL_PIXELS / 2),                    // middle
     Math.floor(TOTAL_PIXELS / 2) + CANVAS_WIDTH + 1, // off-middle
   ]);

@@ -33,7 +33,9 @@ export function tryAcquire(sql, userId, now = Date.now()) {
   // Drain the cursor so rowsWritten is finalized.
   updateCursor.toArray();
   if (updateCursor.rowsWritten > 0) {
-    if (Math.random() < GC_SAMPLE_RATE) gc(sql, now);
+    if (Math.random() < GC_SAMPLE_RATE) {
+      try { gc(sql, now); } catch { /* GC is best-effort */ }
+    }
     return { allowed: true, retryAfter: 0 };
   }
 
@@ -45,7 +47,9 @@ export function tryAcquire(sql, userId, now = Date.now()) {
       userId,
       expiresAt,
     );
-    if (Math.random() < GC_SAMPLE_RATE) gc(sql, now);
+    if (Math.random() < GC_SAMPLE_RATE) {
+      try { gc(sql, now); } catch { /* GC is best-effort */ }
+    }
     return { allowed: true, retryAfter: 0 };
   } catch {
     return { allowed: false, retryAfter: REQUEST_COOLDOWN_SEC };

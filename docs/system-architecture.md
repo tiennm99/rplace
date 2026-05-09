@@ -2,80 +2,163 @@
 
 ## Overview
 
-rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker. The frontend (Svelte SPA) is served as static assets, the API (Hono) handles pixel operations, and a Durable Object manages WebSocket broadcasting.
+rplace is a collaborative pixel canvas deployed as a single Cloudflare Worker.
+The frontend (Svelte SPA) is served as static assets, and a single
+**Durable Object** (`CanvasRoom`, `idFromName('main')`) owns canvas state,
+rate-limit cooldowns, and the WebSocket broadcast hub. The Worker is a
+thin validation/routing proxy.
+
+## Component Map
+
+```
+Browser (Svelte SPA + WebSocket)
+  |  GET  /api/canvas   → 16 MB binary, edge-cached 10s
+  |  POST /api/place    → batch pixel placement (validated at edge)
+  |  WS   /api/ws       → real-time pixel deltas
+  v
+Cloudflare Worker (Hono — thin proxy)
+  └─▶ CanvasRoom Durable Object  (single instance, 'main')
+        ├── canvas_chunks   SQLite BLOB rows (256 × 64 KB = 16 MB)
+        ├── cooldowns       SQLite TTL rows  (1s rate-limit)
+        └── WebSocket hub   Hibernation API broadcasts pixel deltas
+```
 
 ## Data Flow
 
 ### Pixel Placement
 
 ```
-1. User draws on canvas → optimistic render into a pending buffer
-2. User hits Submit → POST /api/place { pixels: [{x, y, color}] }
-3. Worker validates input (bounds, types, batch size ≤ 2048)
-4. Worker checks cooldown via SET NX EX (atomic per-user lock)
-5. Worker writes pixels via Redis BITFIELD (atomic batch)
-6. Worker sends pixels to Durable Object /broadcast
-7. Durable Object fans out to all WebSocket clients
-8. Response: { ok: true }
+1. User draws on canvas → optimistic render into a pending buffer.
+2. User hits Submit → POST /api/place { pixels: [{x, y, color}, ...] }.
+3. Worker validates input (bounds, types, batch ≤ 2048, body ≤ 128 KB).
+4. Worker resolves userId from CF-Connecting-IP and forwards to DO /place.
+5. DO atomically:
+     a. cooldowns.tryAcquire(userId, 1s) — UPDATE expired or INSERT new row.
+        On conflict (active claim), responds 429.
+     b. chunk_storage.writePixels — group pixels by chunk_id, read each
+        touched chunk's BLOB, modify in memory, INSERT OR REPLACE.
+     c. Broadcast `{type:'pixels', pixels}` to all hibernating WebSockets.
+6. Response: { ok: true } (or { error, retryAfter } on rate limit).
 ```
+
+The DO is single-threaded; the entire 5a-c sequence runs without
+preemption, so cooldown check + write + broadcast are effectively atomic
+without explicit transactions.
 
 ### Canvas Loading
 
 ```
-1. Client fetches GET /api/canvas
-2. Worker reads Redis key via GETRANGE → raw binary (16 MB, gzip-compressed by CF edge)
-3. Client receives 16 MB of bytes — each byte is a palette index (u8, byte-aligned)
-4. Client maps indices → RGBA ImageData via COLORS_RGBA lookup
-5. Renders onto HTML5 Canvas with OffscreenCanvas
+1. Client fetches GET /api/canvas (10s edge-cache; CDN serves 99% of hits).
+2. Worker forwards to DO /canvas on miss.
+3. DO chunk_storage.readAllChunks: SELECT all canvas_chunks rows, copy each
+   BLOB into a single 16 MB Uint8Array offset by chunk_id × CHUNK_BYTES.
+4. Client receives raw bytes (CF auto-gzip), maps each byte → COLORS_RGBA.
+5. Renders via OffscreenCanvas + ImageData.
 ```
 
 ### Real-time Updates
 
 ```
-1. Client connects WS /api/ws
-2. Worker upgrades to Durable Object WebSocket
-3. DO stores connection in memory Set
-4. On pixel placement → DO broadcasts JSON to all connections
-5. Client updates local ImageData + re-renders
-6. On disconnect → auto-reconnect with exponential backoff (1s→30s)
+1. Client connects WS /api/ws.
+2. Worker forwards upgrade to DO /ws (URL rewritten to /ws so the DO
+   pathname dispatch matches).
+3. DO state.acceptWebSocket(server) — Hibernation API; idle sockets
+   survive DO eviction at zero CPU cost.
+4. On placement → DO iterates state.getWebSockets() and sends JSON.
+5. Client merges received pixels into local ImageData; re-renders dirty
+   region.
+6. On disconnect → exponential-backoff reconnect (1 s → 30 s).
 ```
 
 ## Storage
 
-### Redis STRING / BITFIELD (Canvas)
+### `canvas_chunks` (canvas pixels)
 
-- Key: `rplace:canvas:v2` (bumped from the old `rplace:canvas` so the 32-color/2048² data is ignored on rollout)
-- Encoding: 8 bits per pixel (u8), 256-color palette — byte-aligned, so raw Redis bytes are the pixel indices directly
-- Size: `4096 × 4096 × 1 = 16,777,216 bytes` (16 MB)
-- Offset: `y * CANVAS_WIDTH + x`
-- Atomic batch writes: single BITFIELD command chaining `SET u8 #offset color` per pixel
-- Reads via GETRANGE return the whole buffer; Cloudflare edge handles gzip
+| Column | Type | Notes |
+|---|---|---|
+| `chunk_id` | INTEGER PRIMARY KEY | 0 .. CHUNK_COUNT − 1 |
+| `bytes` | BLOB NOT NULL | Exactly CHUNK_BYTES bytes (last chunk may be short) |
 
-### Redis STRING (Cooldown)
+- Linear byte layout: `offset = y * CANVAS_WIDTH + x`
+- `chunk_id = floor(offset / CHUNK_BYTES)`
+- `CHUNK_BYTES = 65536`, `CHUNK_COUNT = ceil(TOTAL_PIXELS / CHUNK_BYTES)`
+- **Lazy initialization:** missing rows read as zero-filled buffers. Resizing
+  the canvas is just a constants change — new chunks materialize on first
+  read. No migration script needed.
+- **Hard caps:** CF DO BLOB row size 2 MB → 64 KB chunks have 32× headroom.
 
-- Key pattern: `cooldown:{userId}`
-- Value: `"1"` (presence is the signal; content is irrelevant)
-- TTL: `REQUEST_COOLDOWN_SEC` (1s) — auto-expires, no explicit cleanup
-- Atomic via `SET key "1" NX EX 1`
+### `cooldowns` (rate-limit windows)
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | TEXT PRIMARY KEY | Hashed CF-Connecting-IP |
+| `expires_at` | INTEGER NOT NULL | ms epoch; row becomes stale past this point |
+
+- `idx_cooldowns_expires` keeps lazy GC sweeps cheap.
+- GC runs at 1% sample rate inside `tryAcquire`, wrapped in `try/catch` —
+  best-effort; never blocks the rate-limit decision.
 
 ## Rate Limiting
 
-Fixed-window cooldown, one request per second per user:
+Single-row per user, 1 s window. Race-safe inside the DO via:
 
 ```
-On placement request:
-1. SET cooldown:{userId} "1" NX EX 1
-2. If reply == "OK" → allow (key set, TTL 1s)
-3. If reply == null → reject (429, retryAfter = 1)
+UPDATE cooldowns SET expires_at = ? WHERE user_id = ? AND expires_at <= ?
+  → if rowsWritten > 0: claim acquired (existing row was expired).
+  → else: INSERT INTO cooldowns ...
+        if INSERT throws on PK conflict → claim denied (active row exists).
 ```
 
-Batch size is independent of the cooldown; it is validated separately
-(MAX_BATCH_SIZE = 2048). Anonymous identity via CF-Connecting-IP hash.
+Hardness comes from the DO single-threaded model; no SQL-level locking
+needed.
+
+## Migration Endpoint (transitional)
+
+`POST /admin/migrate-from-upstash` (token-gated): one-shot importer that
+pulls the legacy Upstash canvas via `lib/canvas-storage.js` (4 chunked
+GETRANGE calls) and posts the raw 16 MB bytes to DO `/import`. The DO
+splits into CHUNK_COUNT BLOB rows in a single sync transaction, then
+the worker round-trips a sample-byte verification.
+
+Removed in Phase 4 of `plans/260509-2309-canvas-on-do-storage` along with
+`@upstash/redis` and `ioredis` dependencies.
+
+## Free-tier Footprint (CF, 2026)
+
+| Resource | Quota | rplace usage at hobby scale | Headroom |
+|---|---|---|---|
+| Workers requests | 100K/day | ~100/day (50 users) | 1000× |
+| DO storage / object | 10 GB | 16 MB | 600× |
+| DO storage / account | 5 GB | 16 MB | 300× |
+| BLOB row size | 2 MB | 64 KB chunks | 32× |
+| Per-DO request rate | 1,000 / s soft cap | <1 / s | 1000× |
+| WS connections / DO | tens of thousands | ~50 | huge |
+
+`/api/canvas` carries `Cache-Control: public, s-maxage=10, stale-while-revalidate=30`.
+Verify edge HIT in production via `cf-cache-status: HIT`; if absent, wrap
+the worker handler with the Cache API to enforce caching.
 
 ## Security
 
-- **Rate limiting**: Atomic `SET NX EX` prevents race conditions
-- **Identity**: CF-Connecting-IP (set by Cloudflare, unspoofable)
-- **Input validation**: Bounds checking, type checking, integer validation on all pixel data
-- **Batch cap**: Max 2048 pixels per request + request body size guard
-- **DO isolation**: /broadcast route only reachable via DO stub, not externally
+- **Rate limiting**: race-safe at the actor (single-threaded DO).
+- **Identity**: CF-Connecting-IP hashed to userId — unspoofable.
+- **Input validation**: strict bounds + type checks at the worker edge,
+  re-validated at the DO trust boundary.
+- **Body cap**: ~128 KB per `/api/place` (2048 pixels × ~64 B JSON each).
+- **Migration endpoint**: Bearer-token gated. Token-comparison is direct
+  string equality — adequate at hobby scale; consider constant-time
+  comparison if exposure profile changes.
+- **DO isolation**: `/canvas`, `/place`, `/import`, `/ws` are intra-DO
+  paths only — not internet-reachable except via the worker.
+
+## Operational Notes
+
+- **Single-region.** DO is anchored to one Cloudflare colo; latency for
+  far-away users mirrors the previous Upstash Redis topology — no
+  regression.
+- **DO eviction mid-place** is safe: the SQLite write commits before
+  broadcast. If the DO evicts before broadcast fires, client WS receives
+  no message but auto-reconnects and re-fetches `/api/canvas`. No data
+  loss; minor latency tail.
+- **Storage billing.** Per-account 5 GB free cap on Free plan as of
+  Jan 7 2026 — current 16 MB is far under. Monitor on resize.

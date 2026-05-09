@@ -81,8 +81,10 @@ export function writePixels(sql, pixels) {
 
   // For each touched chunk: read current bytes (or zero-fill), apply edits,
   // write back. INSERT OR REPLACE upserts the row.
-  // Note: CF DO transactions are implicit per-fetch handler invocation —
-  // multiple sql.exec calls within the same handler are atomic.
+  // Atomicity: this loop is fully synchronous (no `await`) and the DO is
+  // single-threaded, so the chunk updates are atomic with respect to other
+  // requests. If anyone adds an `await` inside this loop, wrap the whole
+  // block in `state.storage.transactionSync(() => { ... })` to preserve it.
   for (const [chunkId, edits] of groups) {
     const buf = readChunk(sql, chunkId);
     // readChunk returns a fresh Uint8Array (or wraps a buffer); writes must

@@ -62,13 +62,15 @@ app.post('/api/place', async (c) => {
   });
 });
 
-/** GET /api/ws — WebSocket upgrade routed to the DO. */
+/** GET /api/ws — WebSocket upgrade routed to the DO.
+ *  The DO routes by url.pathname, so we rewrite the URL to `/ws` while
+ *  preserving the original headers (including Upgrade) via the request init. */
 app.get('/api/ws', async (c) => {
   const upgradeHeader = c.req.header('Upgrade');
   if (upgradeHeader !== 'websocket') {
     return c.text('Expected WebSocket', 426);
   }
-  return room(c.env).fetch(c.req.raw);
+  return room(c.env).fetch('http://do/ws', c.req.raw);
 });
 
 /**
