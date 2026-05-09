@@ -39,6 +39,15 @@ export const CHUNK_BYTES   = 65536;                                       // 64 
 export const CHUNK_COUNT   = Math.ceil(TOTAL_PIXELS / CHUNK_BYTES);       // 256
 ```
 
+**Why 64 KB chunks (informed by actual CF DO limits, May 2026):**
+- BLOB row cap is **2 MB** → `CHUNK_BYTES` could be up to ~2 MB; we use 64 KB (32× under).
+- Storage caps are **10 GB / DO** and **5 GB / account** (Free) → 16 MB canvas
+  is ~300× under either cap; resize to ~70K×70K is feasible on Free.
+- Soft request cap is **1,000 req/sec / DO** → hobby workload is 1‰ of this.
+- Smaller chunks minimize read-modify-write amplification on **clustered** writes
+  (single placements + image patches), which is rplace's actual workload pattern.
+  Bigger chunks would only help uniform-random writes — not a real workload here.
+
 Schema (created in DO constructor via `sql.exec` if not exists):
 
 ```sql

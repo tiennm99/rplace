@@ -73,7 +73,9 @@ Phase order is strict: 1 → 2 → 3 → 4 → 5. Each phase blocks the next.
 | Test rewrite scope creep | Low | Time-box testcontainers→DO test rewrite to 4h; cut e2e if needed |
 | Migration corrupts canvas | High | Keep Upstash data 7 days post-migration as rollback |
 | DO single-region latency regression | Low | Same as today's Upstash (single region) — no change |
-| Storage billing exposure if canvas grows | Med | Monitor; current 16 MB << 1 GB threshold |
+| Storage exposure if canvas grows | Low | Per-DO 10 GB / per-account 5 GB on Free; current 16 MB has 300× headroom |
+| BLOB row size cap (2 MB) | None | `CHUNK_BYTES = 64 KB` has 32× headroom from this limit |
+| Per-DO 1,000 req/sec soft cap | None | Hobby load is ~1 req/sec; edge cache absorbs `/api/canvas` |
 
 ## Rollback Plan
 

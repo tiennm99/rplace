@@ -38,14 +38,19 @@ needed.
 - **Aspect ratio change** (non-square) is fine. The 1-D byte-layout
   (`y * CANVAS_WIDTH + x`) still holds. Just make sure clients pull
   the new constants too — frontend reads them from the same module.
-- **Storage cap.** SQLite-backed DO storage is 1 GB on the Free plan.
-  A 1-byte-per-pixel canvas fits up to roughly **32,768 × 32,768**
-  before hitting that ceiling.
+- **Storage caps (Cloudflare Free plan, 2026).**
+  - Per Durable Object: **10 GB** (would allow ~100,000 × 100,000)
+  - Per Account: **5 GB** (the real ceiling on Free)
+  - At 1 byte per pixel, the practical free-tier ceiling is roughly
+    **70,000 × 70,000 pixels** (≈4.9 GB).
+  - SQLite BLOB row cap is **2 MB**; our 64 KB `CHUNK_BYTES` has 32× headroom
+    so resizing never touches that limit.
 
 ## Free-tier monitoring
 
 After resize, watch:
 - Cloudflare Workers requests/day (free cap: 100,000)
-- Durable Object storage size (free cap: 1 GB per DO)
+- Durable Object storage (free caps: 10 GB per DO, 5 GB per account)
+- Per-DO request rate (soft cap: 1,000 req/sec)
 
-Both visible on the Cloudflare dashboard for the rplace project.
+All visible on the Cloudflare dashboard for the rplace project.
