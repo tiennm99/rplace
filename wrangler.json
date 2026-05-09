@@ -27,5 +27,9 @@
     "traces": {
       "enabled": true
     }
+  },
+  "vars": {
+    "ALLOWED_ORIGINS": "",
+    "ENVIRONMENT": "development"
   }
 }

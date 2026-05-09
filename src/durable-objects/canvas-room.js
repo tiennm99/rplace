@@ -1,4 +1,4 @@
-import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from '../lib/constants.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE, MAX_WS_PER_IDENTITY } from '../lib/constants.js';
 import { init as initSchema } from './lib/schema.js';
 import { readAllChunks, writePixels } from './lib/chunk-storage.js';
 import { tryAcquire, release } from './lib/cooldown-store.js';
@@ -32,7 +32,7 @@ export class CanvasRoom {
     switch (url.pathname) {
       case '/canvas': return this.#handleGetCanvas();
       case '/place':  return this.#handlePlace(request);
-      case '/ws':     return this.#handleWsUpgrade();
+      case '/ws':     return this.#handleWsUpgrade(url);
       default:        return new Response('not found', { status: 404 });
     }
   }
@@ -103,10 +103,17 @@ export class CanvasRoom {
     return Response.json({ ok: true });
   }
 
-  #handleWsUpgrade() {
+  #handleWsUpgrade(url) {
+    const identity = url.searchParams.get('identity') || 'anon:unknown';
+    const existing = this.state.getWebSockets(identity);
+    if (existing.length >= MAX_WS_PER_IDENTITY) {
+      return new Response('too_many_sockets', { status: 429 });
+    }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.state.acceptWebSocket(server);
+    // Tag the socket with identity so getWebSockets(identity) can count it
+    // toward the per-identity cap on subsequent upgrades.
+    this.state.acceptWebSocket(server, [identity]);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -125,8 +132,15 @@ export class CanvasRoom {
 
   /** Hibernation-API callbacks. */
 
-  webSocketMessage(ws) {
-    // Protocol is broadcast-only; reject any inbound payload.
+  webSocketMessage(ws, message) {
+    // Heartbeat: client sends 'ping', server replies with {type:'pong'} so
+    // dead connections fire onclose promptly instead of waiting for OS-level
+    // TCP keepalive (potentially minutes).
+    if (typeof message === 'string' && message === 'ping') {
+      try { ws.send(JSON.stringify({ type: 'pong' })); } catch { /* socket closing */ }
+      return;
+    }
+    // Anything else is unexpected — close the socket.
     ws.close(1003, 'unexpected client message');
   }
 

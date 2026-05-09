@@ -14,6 +14,12 @@
   /** Committed color index per pixel (server-confirmed state). Allocated upfront so WS
    *  updates that arrive during the initial canvas fetch don't null-deref. */
   let committedColors = new Uint8Array(CANVAS_WIDTH * CANVAS_HEIGHT);
+  /** WS pixel updates that arrive while loadCanvas is in flight. Buffered
+   *  here and replayed after committedColors is replaced — without this, the
+   *  fetch's `new Uint8Array(indices)` assignment would silently overwrite
+   *  any pixels broadcast during the fetch window. */
+  let pendingWsEdits = [];
+  let isLoadComplete = false;
   let pan = { x: 0, y: 0 };
   let dragging = $state(false);
   let lastMouse = { x: 0, y: 0 };
@@ -166,14 +172,22 @@
   // --- Public API (called by App.svelte) ---
 
   export function applyUpdates(pixels) {
-    for (const { x, y, color } of pixels) {
-      committedColors[y * CANVAS_WIDTH + x] = color;
-      // Only update display if no pending or active stroke covers this pixel
-      if (buffer.getColorAt(x, y) < 0 && !currentStrokeKeys.has(y * 65536 + x)) {
-        setPixelRgba(x, y, color);
-      }
+    if (!isLoadComplete) {
+      // Buffer until loadCanvas resolves; replay against the freshly-fetched
+      // committedColors there. Without this, the fetch overwrites these edits.
+      pendingWsEdits.push(...pixels);
+      return;
     }
+    for (const { x, y, color } of pixels) applySingleUpdate(x, y, color);
     render();
+  }
+
+  function applySingleUpdate(x, y, color) {
+    committedColors[y * CANVAS_WIDTH + x] = color;
+    // Only update display if no pending or active stroke covers this pixel.
+    if (buffer.getColorAt(x, y) < 0 && !currentStrokeKeys.has(y * 65536 + x)) {
+      setPixelRgba(x, y, color);
+    }
   }
 
   export function undo() {
@@ -465,6 +479,7 @@
   async function loadCanvas() {
     loading = true;
     loadError = null;
+    isLoadComplete = false;
     try {
       const res = await fetch('/api/canvas');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -473,7 +488,14 @@
       committedColors = new Uint8Array(indices); // replace pre-allocated zero array
       const rgba = indicesToRgba(indices);
       imageData = new ImageData(rgba, CANVAS_WIDTH, CANVAS_HEIGHT);
+      // Replay any WS pixels that arrived during the fetch — they raced the
+      // assignment above and would otherwise be lost.
+      if (pendingWsEdits.length > 0) {
+        for (const { x, y, color } of pendingWsEdits) applySingleUpdate(x, y, color);
+        pendingWsEdits = [];
+      }
       imageDataDirty = true;
+      isLoadComplete = true;
       render();
     } catch (err) {
       console.error('Failed to load canvas:', err);

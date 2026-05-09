@@ -11,6 +11,10 @@ export const MAX_COLORS = 256;
 export const REQUEST_COOLDOWN_SEC = 1;
 export const MAX_BATCH_SIZE = 2048;
 
+/** Per-identity concurrent WebSocket cap. Prevents broadcast amplification
+ *  from a single client opening thousands of sockets. */
+export const MAX_WS_PER_IDENTITY = 5;
+
 /** Canvas chunked storage layout (DO SQLite). 64 KB chunks → 256 chunks for
  *  the 16 MB / 4096² canvas. CHUNK_COUNT is derived: bumping CANVAS_WIDTH or
  *  CANVAS_HEIGHT and redeploying transparently allocates more chunks (lazy-

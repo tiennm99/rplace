@@ -189,4 +189,51 @@ describe('GET /api/ws', () => {
     const res = await app.fetch(req, env);
     expect(res.status).toBe(426);
   });
+
+  it('rejects WS upgrade from a disallowed Origin', async () => {
+    // undici disallows constructing a Response with status 101; use a 2xx
+    // sentinel to assert the upstream DO was reached.
+    doResponse = () => new Response(null, { status: 200 });
+    const req = new Request('http://localhost/api/ws', {
+      headers: {
+        Upgrade: 'websocket',
+        Origin: 'https://evil.example',
+      },
+    });
+    const restrictedEnv = {
+      ...env,
+      ALLOWED_ORIGINS: 'https://rplace.miti99.workers.dev',
+    };
+    const res = await app.fetch(req, restrictedEnv);
+    expect(res.status).toBe(403);
+  });
+
+  it('forwards WS upgrade when Origin is in the allowlist', async () => {
+    // undici disallows constructing a Response with status 101; use a 2xx
+    // sentinel to assert the upstream DO was reached.
+    doResponse = () => new Response(null, { status: 200 });
+    const req = new Request('http://localhost/api/ws', {
+      headers: {
+        Upgrade: 'websocket',
+        Origin: 'https://rplace.miti99.workers.dev',
+      },
+    });
+    const restrictedEnv = {
+      ...env,
+      ALLOWED_ORIGINS: 'https://rplace.miti99.workers.dev',
+    };
+    const res = await app.fetch(req, restrictedEnv);
+    expect(res.status).toBe(200);
+  });
+
+  it('forwards WS upgrade when ALLOWED_ORIGINS is empty (dev default)', async () => {
+    // undici disallows constructing a Response with status 101; use a 2xx
+    // sentinel to assert the upstream DO was reached.
+    doResponse = () => new Response(null, { status: 200 });
+    const req = new Request('http://localhost/api/ws', {
+      headers: { Upgrade: 'websocket', Origin: 'https://anything.example' },
+    });
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(200);
+  });
 });

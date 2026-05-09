@@ -105,14 +105,42 @@ app.post('/api/place', async (c) => {
 });
 
 /** GET /api/ws — WebSocket upgrade routed to the DO.
- *  The DO routes by url.pathname, so we rewrite the URL to `/ws` while
- *  preserving the original headers (including Upgrade) via the request init. */
+ *  Origin allowlist + identity resolution + per-identity cap (in DO). */
 app.get('/api/ws', async (c) => {
   const upgradeHeader = c.req.header('Upgrade');
   if (upgradeHeader !== 'websocket') {
     return c.text('Expected WebSocket', 426);
   }
-  return room(c.env).fetch('http://do/ws', c.req.raw);
+  // Origin allowlist. Empty ALLOWED_ORIGINS ⇒ allow all (dev / preview).
+  const origin = c.req.header('Origin');
+  const allowed = parseAllowedOrigins(c.env?.ALLOWED_ORIGINS);
+  if (origin && allowed.size > 0 && !allowed.has(origin)) {
+    return c.text('forbidden_origin', 403);
+  }
+  let identity;
+  try {
+    identity = await resolveIdentity(c.req.raw, c.env);
+  } catch (err) {
+    if (err instanceof NoIdentityError) {
+      return c.json({ error: 'no_identity' }, 500);
+    }
+    throw err;
+  }
+  // Identity goes via URL query so the original request (with Upgrade header)
+  // forwards unchanged. CF DO routing reads it from request.url.
+  const url = `http://do/ws?identity=${encodeURIComponent(identity.id)}`;
+  return room(c.env).fetch(url, c.req.raw);
 });
+
+/** Parse the comma-separated ALLOWED_ORIGINS env var into a Set. */
+function parseAllowedOrigins(raw) {
+  const out = new Set();
+  if (!raw) return out;
+  for (const o of String(raw).split(',')) {
+    const trimmed = o.trim();
+    if (trimmed) out.add(trimmed);
+  }
+  return out;
+}
 
 export default app;

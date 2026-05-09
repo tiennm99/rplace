@@ -108,6 +108,33 @@
   // Monotonic broadcast counter from the server. A gap means we missed at
   // least one frame (DO hibernation, network glitch) — refetch to resync.
   let lastSeq = null;
+  // App-level heartbeat — if no pong arrives within PONG_TIMEOUT_MS we close
+  // the socket so onclose triggers reconnect (avoids zombie-connection wait
+  // for OS-level TCP keepalive).
+  const PING_INTERVAL_MS = 30_000;
+  const PONG_TIMEOUT_MS = 60_000;
+  let pingInterval = null;
+  let pongWatchdog = null;
+  let lastPongAt = 0;
+
+  function startHeartbeat(ws) {
+    lastPongAt = Date.now();
+    pingInterval = setInterval(() => {
+      if (ws.readyState === 1) {
+        try { ws.send('ping'); } catch { /* socket closing */ }
+      }
+    }, PING_INTERVAL_MS);
+    pongWatchdog = setInterval(() => {
+      if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+    }, PING_INTERVAL_MS / 3);
+  }
+
+  function stopHeartbeat() {
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    if (pongWatchdog) { clearInterval(pongWatchdog); pongWatchdog = null; }
+  }
 
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -116,6 +143,10 @@
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'pong') {
+          lastPongAt = Date.now();
+          return;
+        }
         if (data.type === 'pixels' && canvasRenderer) {
           if (data.seq != null) {
             const expected = lastSeq == null ? data.seq : ((lastSeq + 1) >>> 0);
@@ -139,8 +170,10 @@
       wsRetryDelay = 1000;
       isReconnect = true;
       wsState = 'open';
+      startHeartbeat(ws);
     };
     ws.onclose = () => {
+      stopHeartbeat();
       wsState = 'reconnecting';
       setTimeout(connectWebSocket, wsRetryDelay);
       wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
