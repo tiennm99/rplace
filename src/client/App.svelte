@@ -105,6 +105,9 @@
   let wsRetryDelay = 1000;
   let isReconnect = false;
   let wsState = $state('connecting'); // 'connecting' | 'open' | 'reconnecting' | 'closed'
+  // Monotonic broadcast counter from the server. A gap means we missed at
+  // least one frame (DO hibernation, network glitch) — refetch to resync.
+  let lastSeq = null;
 
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -114,12 +117,21 @@
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'pixels' && canvasRenderer) {
+          if (data.seq != null) {
+            const expected = lastSeq == null ? data.seq : ((lastSeq + 1) >>> 0);
+            if (data.seq !== expected) {
+              canvasRenderer.refetchCanvas();
+            }
+            lastSeq = data.seq;
+          }
           canvasRenderer.applyUpdates(data.pixels);
         }
       } catch { /* ignore parse errors */ }
     };
 
     ws.onopen = () => {
+      // Reset on every (re)connect — fresh canvas fetch is the new baseline.
+      lastSeq = null;
       // Refetch canvas after a reconnect to recover any pixels missed while disconnected.
       if (isReconnect && canvasRenderer) {
         canvasRenderer.refetchCanvas();

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { getUserId } from './lib/get-user-id.js';
+import { resolveIdentity, NoIdentityError } from './lib/get-user-id.js';
+import { formatSetCookie } from './lib/cookie.js';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, MAX_COLORS, MAX_BATCH_SIZE } from './lib/constants.js';
 
 export { CanvasRoom } from './durable-objects/canvas-room.js';
@@ -9,14 +10,42 @@ const app = new Hono();
 // ~64 bytes is generous per pixel JSON object {"x":2047,"y":2047,"color":31}
 const MAX_BODY_BYTES = MAX_BATCH_SIZE * 64;
 
+const COOKIE_OPTS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Lax',
+  path: '/',
+  maxAge: 60 * 60 * 24 * 365, // 1 year
+};
+
 /** Resolve the singleton CanvasRoom DO stub. */
 function room(env) {
   return env.CANVAS_ROOM.get(env.CANVAS_ROOM.idFromName('main'));
 }
 
-/** GET /api/canvas — full canvas binary, served by the DO directly. */
+/** GET /api/canvas — full canvas binary, served by the DO directly. Issues
+ *  the rplace_id cookie on first request so future calls bypass NAT-shared
+ *  IP buckets. */
 app.get('/api/canvas', async (c) => {
-  return room(c.env).fetch('http://do/canvas');
+  let identity;
+  try {
+    identity = await resolveIdentity(c.req.raw, c.env);
+  } catch (err) {
+    if (err instanceof NoIdentityError) {
+      return c.json({ error: 'no_identity' }, 500);
+    }
+    throw err;
+  }
+  const upstream = await room(c.env).fetch('http://do/canvas');
+  if (!identity.mintCookieValue) return upstream;
+  // Attach Set-Cookie without mutating the upstream Response (its body is a
+  // stream; new Response keeps it linked).
+  const out = new Response(upstream.body, upstream);
+  out.headers.append(
+    'Set-Cookie',
+    formatSetCookie('rplace_id', identity.mintCookieValue, COOKIE_OPTS),
+  );
+  return out;
 });
 
 /** POST /api/place — validate at the edge, forward to the DO. */
@@ -57,13 +86,21 @@ app.post('/api/place', async (c) => {
     }
   }
 
-  const userId = await getUserId(c.req.raw);
+  let identity;
+  try {
+    identity = await resolveIdentity(c.req.raw, c.env);
+  } catch (err) {
+    if (err instanceof NoIdentityError) {
+      return c.json({ error: 'no_identity' }, 500);
+    }
+    throw err;
+  }
 
   // DO does cooldown check + pixel write + broadcast in one atomic step.
   return room(c.env).fetch('http://do/place', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, pixels }),
+    body: JSON.stringify({ userId: identity.id, pixels }),
   });
 });
 

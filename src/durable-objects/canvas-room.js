@@ -13,6 +13,13 @@ import { tryAcquire, release } from './lib/cooldown-store.js';
  * the four internal endpoints below.
  */
 export class CanvasRoom {
+  /**
+   * Monotonic broadcast counter. Resets on hibernation rehydrate (in-memory
+   * only) — clients refetch the canvas on reconnect, so a reset after a gap
+   * is safe. Uint32 wraparound is handled by `>>> 0`.
+   */
+  #seq = 0;
+
   constructor(state, env) {
     this.state = state;
     this.env = env;
@@ -104,7 +111,8 @@ export class CanvasRoom {
   }
 
   #broadcastPixels(pixels) {
-    const message = JSON.stringify({ type: 'pixels', pixels });
+    this.#seq = (this.#seq + 1) >>> 0;
+    const message = JSON.stringify({ type: 'pixels', seq: this.#seq, pixels });
     for (const ws of this.state.getWebSockets()) {
       try {
         ws.send(message);
