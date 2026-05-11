@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Cookie+IP identity & broadcast sequence numbers"
-status: pending
+status: completed
 priority: P1
 effort: "3h"
 dependencies: []

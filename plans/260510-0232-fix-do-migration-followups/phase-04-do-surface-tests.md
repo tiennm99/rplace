@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Full DO surface test coverage"
-status: pending
+status: completed
 priority: P2
 effort: "6h"
 dependencies: [1, 2, 3]

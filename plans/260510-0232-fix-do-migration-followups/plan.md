@@ -1,8 +1,9 @@
 ---
 title: "Fix critical bugs and security gaps from DO migration code review"
-status: in-progress
+status: completed
 priority: P1
 created: 2026-05-10
+completed: 2026-05-11
 phases: 5
 source: skill
 sourceReports:
@@ -29,11 +30,11 @@ Close the 3 Critical + 5 High findings from the post-migration triple-review (co
 
 | # | File | Title | Status | Priority | Blocks |
 |---|---|---|---|---|---|
-| 1 | [phase-01-do-storage-atomicity.md](phase-01-do-storage-atomicity.md) | DO storage atomicity & correctness | pending | P1 | 4 |
-| 2 | [phase-02-cookie-ip-identity.md](phase-02-cookie-ip-identity.md) | Cookie+IP identity & broadcast sequence | pending | P1 | 4 |
-| 3 | [phase-03-ws-hardening-client-race.md](phase-03-ws-hardening-client-race.md) | WebSocket hardening & client race fix | pending | P1 | 4 |
-| 4 | [phase-04-do-surface-tests.md](phase-04-do-surface-tests.md) | Full DO surface test coverage | pending | P2 | — |
-| 5 | [phase-05-docs-cleanup.md](phase-05-docs-cleanup.md) | Docs cleanup & legacy plan archival | pending | P2 | — |
+| 1 | [phase-01-do-storage-atomicity.md](phase-01-do-storage-atomicity.md) | DO storage atomicity & correctness | completed | P1 | 4 |
+| 2 | [phase-02-cookie-ip-identity.md](phase-02-cookie-ip-identity.md) | Cookie+IP identity & broadcast sequence | completed | P1 | 4 |
+| 3 | [phase-03-ws-hardening-client-race.md](phase-03-ws-hardening-client-race.md) | WebSocket hardening & client race fix | completed | P1 | 4 |
+| 4 | [phase-04-do-surface-tests.md](phase-04-do-surface-tests.md) | Full DO surface test coverage | completed | P2 | — |
+| 5 | [phase-05-docs-cleanup.md](phase-05-docs-cleanup.md) | Docs cleanup & legacy plan archival | completed | P2 | — |
 
 Phases 1, 2, 3 are independent and can ship in any order or in parallel. Phase 4 depends on the API surfaces stabilized in 1–3. Phase 5 is independent — can land first.
 

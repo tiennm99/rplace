@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Docs cleanup & legacy plan archival"
-status: pending
+status: completed
 priority: P2
 effort: "30m"
 dependencies: []
