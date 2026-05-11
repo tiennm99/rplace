@@ -81,22 +81,28 @@ npm run deploy   # Builds frontend + deploys worker to Cloudflare
 ```
 src/
 ├── worker.js                          # Hono entry — thin proxy + edge validation
-├── admin/
-│   └── migrate-from-upstash.js        # One-shot Upstash → DO importer (token-gated)
 ├── durable-objects/
 │   ├── canvas-room.js                 # DO: storage + cooldown + WS hub
 │   └── lib/
 │       ├── schema.js                  # Idempotent CREATE TABLE
-│       ├── chunk-storage.js           # BLOB chunk read/write/import
+│       ├── chunk-storage.js           # BLOB chunk read/write
 │       └── cooldown-store.js          # Rate-limit acquire + lazy GC
 ├── lib/
 │   ├── constants.js                   # CANVAS_WIDTH/HEIGHT, CHUNK_BYTES, palette
 │   ├── canvas-decoder.js              # Raw bytes → RGBA (client-side)
-│   ├── canvas-storage.js              # Legacy Upstash reader (used by migration only)
-│   ├── redis-client.js                # Legacy Upstash REST helpers (migration only)
-│   ├── rate-limiter.js                # Legacy Upstash cooldown (orphaned, awaits removal)
+│   ├── cookie.js                      # parseCookie + formatSetCookie
+│   ├── get-user-id.js                 # Cookie+IP rate-limit identity
+│   ├── pixel-buffer.js                # Pending-stroke buffer (undo/redo)
 │   ├── image-uploader.js              # Browser-side batched uploader
-│   └── get-user-id.js                 # IP-based identity
+│   ├── image-pipeline.js              # Image-to-canvas processing
+│   ├── image-pipeline-client.js       # Client-side queue
+│   ├── image-pipeline-worker.js       # Web Worker handler
+│   ├── image-job-storage.js           # IndexedDB job persistence
+│   ├── image-resize.js                # Resampling
+│   ├── image-transform.js             # Rotation / flip
+│   ├── image-to-palette.js            # Palette quantization
+│   ├── image-color-correction.js      # Brightness / contrast / saturation
+│   └── dither-kernels.js              # Dithering algorithms
 ├── client/
 │   ├── main.js                        # Svelte mount
 │   ├── App.svelte                     # Root + WebSocket
@@ -106,6 +112,7 @@ src/
 │       ├── ColorPicker.svelte         # Favorites + 256-color grid + custom picker
 │       ├── CanvasControls.svelte      # Zoom buttons + coordinates
 │       ├── DrawToolbar.svelte         # Paint / submit / undo / redo
+│       ├── HelpOverlay.svelte         # Keyboard shortcut help
 │       └── ImageImporter.svelte       # Image-to-canvas uploader
 └── index.html                         # Vite entry
 ```
@@ -140,15 +147,11 @@ Place pixels on the canvas.
 WebSocket for real-time pixel updates. Messages are JSON:
 
 ```json
-{ "type": "pixels", "pixels": [{ "x": 100, "y": 200, "color": 27 }] }
+{ "type": "pixels", "seq": 42, "pixels": [{ "x": 100, "y": 200, "color": 27 }] }
 ```
 
-### `POST /admin/migrate-from-upstash` (transitional)
-
-Token-gated one-shot endpoint that pulls the canvas from a legacy Upstash
-Redis instance and imports it into the Durable Object. Slated for removal
-after the production migration completes (Phase 4 of
-[`plans/260509-2309-canvas-on-do-storage`](plans/260509-2309-canvas-on-do-storage)).
+`seq` is a monotonic broadcast counter; the client uses it to detect missed
+frames and refetch the canvas to resync.
 
 ## Configuration
 

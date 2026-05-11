@@ -31,39 +31,6 @@ The first deploy applies the `wrangler.json` migration that registers
 5. `curl -I https://your-url/api/canvas` should report
    `cf-cache-status: HIT` after a couple of warm requests (10 s edge cache).
 
-## (Optional) One-Shot Migration from Upstash
-
-Only if you have an existing Upstash-backed deployment to import.
-
-```bash
-# 1. Set credentials for the legacy Upstash instance
-npx wrangler secret put UPSTASH_REDIS_REST_URL
-npx wrangler secret put UPSTASH_REDIS_REST_TOKEN
-
-# 2. Generate and set a migration token
-npx wrangler secret put MIGRATION_TOKEN
-# Paste a random 32-byte hex value
-
-# 3. Deploy
-npm run deploy
-
-# 4. Run the import once
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-     https://your-worker.workers.dev/admin/migrate-from-upstash
-# Expect: {"ok":true,"bytes_imported":16777216,"samples_checked":N,"mismatches":[]}
-
-# 5. Verify in browser; wait 7 days as rollback safety
-# 6. Run Phase 4 cleanup (see plans/260509-2309-canvas-on-do-storage)
-```
-
-After Phase 4 cleanup deletes the migration code, also delete the
-secrets:
-```bash
-npx wrangler secret delete UPSTASH_REDIS_REST_URL
-npx wrangler secret delete UPSTASH_REDIS_REST_TOKEN
-npx wrangler secret delete MIGRATION_TOKEN
-```
-
 ## Custom Domain
 
 ```bash
@@ -97,18 +64,19 @@ sessions stay well under 100K/day.
 ## Troubleshooting
 
 - **Canvas loads empty**: expected on first deploy — DO `canvas_chunks`
-  table is empty until pixels are placed (or migration runs).
+  table is empty until pixels are placed.
 - **WebSocket not connecting**: verify the wrangler migration applied
   via `wrangler tail` — should see no errors on DO instantiation.
 - **`cf-cache-status` shows MISS**: edge caching may need an extra
   `caches.default.put` wrap if `Cache-Control` headers aren't honored
   through the worker → DO → response chain. Verify with two consecutive
   `curl -I` requests; second should HIT.
-- **Migration import fails with `size_mismatch`**: the legacy Upstash
-  data isn't 16 MB. Resize CHUNK constants or delete the partial Upstash
-  data and start fresh.
-- **`already_populated` from migration endpoint**: pass `?force=1` to
-  overwrite. Use only when you're certain.
+- **`forbidden_origin` on `/api/ws`**: production sets `ALLOWED_ORIGINS`
+  in `wrangler.json` `vars`. Add the requesting origin or empty the var
+  for dev. Empty allowlist accepts all origins.
+- **`no_identity` 500 on `/api/place` or `/api/canvas`**: production
+  fails closed when neither the `rplace_id` cookie nor `cf-connecting-ip`
+  is present. Indicates a proxy misconfiguration in front of the Worker.
 - **Storage billing meter ticking up**: per-account 5 GB free cap. A
   16 MB canvas is harmless; the worry only appears if you stand up many
   rooms or hit a runaway insert.

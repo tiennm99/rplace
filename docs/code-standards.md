@@ -26,10 +26,11 @@ src/
 
 ### Worker (src/worker.js, src/lib/*)
 
-- Functions receive `env` parameter for Cloudflare bindings (Redis credentials, DO bindings)
+- Functions receive `env` parameter for Cloudflare bindings (DO bindings, vars)
 - No global state — Workers are stateless between requests
-- Use `@upstash/redis/cloudflare` (REST-based, not TCP)
-- Bitfield operations use builder pattern: `redis.bitfield(key).set().exec()`
+- Durable Object access via `env.CANVAS_ROOM.get(env.CANVAS_ROOM.idFromName('main'))`
+- Identity flows through `resolveIdentity(request, env)` (cookie-first, IP fallback)
+- Edge handlers validate input before forwarding to the DO; the DO re-validates at the trust boundary
 
 ### Client (src/client/*)
 

@@ -30,20 +30,24 @@ Cloudflare Worker (Hono — thin proxy)
 ```
 1. User draws on canvas → optimistic render into a pending buffer.
 2. User hits Submit → POST /api/place { pixels: [{x, y, color}, ...] }.
-3. Worker validates input (bounds, types, batch ≤ 2048, body ≤ 128 KB).
-4. Worker resolves userId from CF-Connecting-IP and forwards to DO /place.
+3. Worker validates input (bounds, types, batch ≤ 2048, Content-Length).
+4. Worker resolves identity (cookie or IP fallback) and forwards to DO /place.
 5. DO atomically:
      a. cooldowns.tryAcquire(userId, 1s) — UPDATE expired or INSERT new row.
         On conflict (active claim), responds 429.
-     b. chunk_storage.writePixels — group pixels by chunk_id, read each
-        touched chunk's BLOB, modify in memory, INSERT OR REPLACE.
-     c. Broadcast `{type:'pixels', pixels}` to all hibernating WebSockets.
+     b. state.storage.transactionSync(() => chunk_storage.writePixels(...))
+        — group pixels by chunk_id, read each touched chunk's BLOB, modify
+        in memory, INSERT OR REPLACE. Transaction makes a multi-chunk batch
+        all-or-nothing.
+     c. On write failure, cooldown is refunded so transient errors don't
+        soft-DOS the user.
+     d. Broadcast `{type:'pixels', seq, pixels}` to all hibernating WebSockets.
 6. Response: { ok: true } (or { error, retryAfter } on rate limit).
 ```
 
-The DO is single-threaded; the entire 5a-c sequence runs without
-preemption, so cooldown check + write + broadcast are effectively atomic
-without explicit transactions.
+The DO is single-threaded; the cooldown + write + broadcast sequence runs
+without preemption. The transactionSync wrapper provides atomicity across
+multiple BLOB chunks.
 
 ### Canvas Loading
 
@@ -91,7 +95,7 @@ without explicit transactions.
 
 | Column | Type | Notes |
 |---|---|---|
-| `user_id` | TEXT PRIMARY KEY | Hashed CF-Connecting-IP |
+| `user_id` | TEXT PRIMARY KEY | `cookie:<uuid>` or `ip:<sha256-prefix>` |
 | `expires_at` | INTEGER NOT NULL | ms epoch; row becomes stale past this point |
 
 - `idx_cooldowns_expires` keeps lazy GC sweeps cheap.
@@ -112,17 +116,6 @@ UPDATE cooldowns SET expires_at = ? WHERE user_id = ? AND expires_at <= ?
 Hardness comes from the DO single-threaded model; no SQL-level locking
 needed.
 
-## Migration Endpoint (transitional)
-
-`POST /admin/migrate-from-upstash` (token-gated): one-shot importer that
-pulls the legacy Upstash canvas via `lib/canvas-storage.js` (4 chunked
-GETRANGE calls) and posts the raw 16 MB bytes to DO `/import`. The DO
-splits into CHUNK_COUNT BLOB rows in a single sync transaction, then
-the worker round-trips a sample-byte verification.
-
-Removed in Phase 4 of `plans/260509-2309-canvas-on-do-storage` along with
-`@upstash/redis` and `ioredis` dependencies.
-
 ## Free-tier Footprint (CF, 2026)
 
 | Resource | Quota | rplace usage at hobby scale | Headroom |
@@ -140,16 +133,25 @@ the worker handler with the Cache API to enforce caching.
 
 ## Security
 
-- **Rate limiting**: race-safe at the actor (single-threaded DO).
-- **Identity**: CF-Connecting-IP hashed to userId — unspoofable.
+- **Rate limiting**: race-safe at the actor (single-threaded DO); writes
+  wrapped in `state.storage.transactionSync` so a multi-chunk batch is
+  all-or-nothing.
+- **Identity**: opaque `rplace_id` cookie (HttpOnly, Secure, SameSite=Lax,
+  1y) issued on first `/api/canvas`. Falls back to a SHA-256 prefix of
+  `cf-connecting-ip` when no cookie is present. In production a request
+  with neither returns 500 `no_identity`.
+- **Cooldown refund**: failed writes refund the cooldown row so a
+  transient storage error doesn't soft-DOS the user for 1 s.
 - **Input validation**: strict bounds + type checks at the worker edge,
-  re-validated at the DO trust boundary.
+  re-validated at the DO trust boundary. `Content-Length` required on
+  POST `/api/place` (411 if missing/zero, 413 if above cap).
 - **Body cap**: ~128 KB per `/api/place` (2048 pixels × ~64 B JSON each).
-- **Migration endpoint**: Bearer-token gated. Token-comparison is direct
-  string equality — adequate at hobby scale; consider constant-time
-  comparison if exposure profile changes.
-- **DO isolation**: `/canvas`, `/place`, `/import`, `/ws` are intra-DO
-  paths only — not internet-reachable except via the worker.
+- **WS Origin allowlist**: `ALLOWED_ORIGINS` env var (comma-separated)
+  rejects upgrades from disallowed origins; empty = allow all (dev).
+- **Per-identity WS cap**: 5 concurrent sockets per identity prevents
+  broadcast amplification; further upgrades return 429.
+- **DO isolation**: `/canvas`, `/place`, `/ws` are intra-DO paths only —
+  not internet-reachable except via the worker.
 
 ## Operational Notes
 
