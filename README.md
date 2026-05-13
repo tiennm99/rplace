@@ -53,7 +53,7 @@ chunks on first read. See [`docs/canvas-resize-procedure.md`](docs/canvas-resize
 ```bash
 git clone <repo-url>
 cd rplace
-npm install
+pnpm install
 ```
 
 No external storage to configure. The canvas and rate-limit state live inside
@@ -63,17 +63,17 @@ the Durable Object.
 
 ```bash
 # Run worker locally (serves API + static frontend)
-npm run dev
+pnpm dev
 
 # Or split frontend + worker
-npm run dev:client   # Vite dev server on :5173 (proxies /api to :8787)
-npm run dev          # Wrangler dev server on :8787
+pnpm dev:client   # Vite dev server on :5173 (proxies /api to :8787)
+pnpm dev          # Wrangler dev server on :8787
 ```
 
 ### Deploy
 
 ```bash
-npm run deploy   # Builds frontend + deploys worker to Cloudflare
+pnpm deploy   # Builds frontend + deploys worker to Cloudflare
 ```
 
 ## Project Structure
