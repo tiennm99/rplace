@@ -17,7 +17,7 @@
     "pixi.js": "^8.18.1"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "svelte": "^5.55.9",
     "vite": "^6.3.2",
     "vitest": "^4.1.7",
