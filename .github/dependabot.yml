@@ -13,7 +13,3 @@ updates:
         patterns: ["*"]
     versioning-strategy: increase
     labels: ["dependencies", "security"]
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "monthly"
