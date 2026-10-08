@@ -202,7 +202,7 @@ describe('GET /api/ws', () => {
     });
     const restrictedEnv = {
       ...env,
-      ALLOWED_ORIGINS: 'https://rplace.miti99.workers.dev',
+      ALLOWED_ORIGINS: 'https://rplace.tiennm99.workers.dev',
     };
     const res = await app.fetch(req, restrictedEnv);
     expect(res.status).toBe(403);
@@ -215,12 +215,12 @@ describe('GET /api/ws', () => {
     const req = new Request('http://localhost/api/ws', {
       headers: {
         Upgrade: 'websocket',
-        Origin: 'https://rplace.miti99.workers.dev',
+        Origin: 'https://rplace.tiennm99.workers.dev',
       },
     });
     const restrictedEnv = {
       ...env,
-      ALLOWED_ORIGINS: 'https://rplace.miti99.workers.dev',
+      ALLOWED_ORIGINS: 'https://rplace.tiennm99.workers.dev',
     };
     const res = await app.fetch(req, restrictedEnv);
     expect(res.status).toBe(200);
